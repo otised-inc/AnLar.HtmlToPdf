@@ -40,6 +40,7 @@ namespace AnLar.HtmlToPdf.Services
                 fontProvider.AddDirectory(fontsDir);
                 converterProperties.SetFontProvider(fontProvider);
                 converterProperties.SetTagWorkerFactory(new AccessibleTagWorkerFactory());
+                converterProperties.SetOutlineHandler(OutlineHandler.CreateStandardHandler());
 
                 var wrappedHtml = WrapInHtmlDocument(htmlContent, documentTitle, documentLanguage);
 
