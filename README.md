@@ -1,14 +1,16 @@
 # AnLar.HtmlToPdf
 
-An ASP.NET Core Web API that converts HTML content into accessible PDF documents compliant with the PDF/UA standard. Built with [iText 7](https://itextpdf.com/) for reliable, structured PDF generation suitable for screen readers and assistive technologies.
+An ASP.NET Core Web API that converts HTML content into accessible PDF documents compliant with the **PDF/UA** (Universal Accessibility) standard. Built with [iText 7](https://itextpdf.com/) for reliable, structured PDF generation suitable for screen readers and assistive technologies.
 
 ## Features
 
-- **PDF/UA Compliance** — Tagged PDF structure with XMP metadata, document language, and title for accessibility
-- **HTML-to-PDF Conversion** — Accepts raw HTML (fragments or full documents) and returns a PDF binary
-- **Semantic Heading Structure** — Custom tag worker ensures proper H1–H6 hierarchy without intermediate wrapper elements
-- **Cross-Platform Font Support** — Resolves system fonts on both Windows and Linux
-- **Smart HTML Wrapping** — Automatically wraps partial HTML snippets in a complete document structure with sensible defaults
+- **PDF/UA-1 Compliance** — Tagged PDF structure with XMP metadata, document language, title, and `DisplayDocTitle` viewer preference (PDF 1.7)
+- **HTML-to-PDF Conversion** — Accepts raw HTML fragments or full documents and returns a PDF binary
+- **Semantic Heading Structure** — Custom tag worker produces clean H1–H6 structure elements without iText's default intermediate `P` wrappers
+- **Automatic Bookmarks** — Headings generate a PDF outline/bookmark tree via iText's `OutlineHandler`
+- **Bundled Fonts** — Ships with Liberation Serif (Regular, Bold, Italic, Bold Italic) so PDFs render consistently even on minimal Linux containers
+- **Cross-Platform Font Resolution** — Multi-strategy font loading: bundled content files, embedded assembly resources, and system font directories on Windows and Linux
+- **Smart HTML Wrapping** — Automatically wraps partial HTML snippets in a complete document with `@page` margins, language attribute, and default serif typography
 
 ## Prerequisites
 
@@ -46,11 +48,11 @@ Converts HTML content to an accessible PDF.
 }
 ```
 
-| Field              | Type   | Required | Description                          |
-|--------------------|--------|----------|--------------------------------------|
-| `htmlContent`      | string | Yes      | HTML content to convert              |
-| `documentTitle`    | string | No       | Title embedded in PDF metadata       |
-| `documentLanguage` | string | No       | Language tag (e.g. `en-US`, `nl-NL`) |
+| Field              | Type   | Required | Default      | Description                          |
+|--------------------|--------|----------|--------------|--------------------------------------|
+| `htmlContent`      | string | Yes      | —            | HTML content to convert              |
+| `documentTitle`    | string | No       | `"Untitled"` | Title embedded in PDF metadata       |
+| `documentLanguage` | string | No       | `"en-US"`    | BCP 47 language tag (e.g. `en-US`, `nl-NL`) |
 
 **Response:** `application/pdf` binary stream.
 
@@ -67,13 +69,22 @@ curl -X POST https://localhost:50670/pdf \
 
 ```
 AnLar.HtmlToPdf/
-├── Controllers/
-│   └── PdfController.cs              # POST /pdf endpoint
-├── Services/
-│   └── AccessiblePdfGenerator.cs     # Core PDF generation & accessibility logic
-├── DTOs/
-│   └── PdfRequest.cs                 # Request model
-└── Program.cs                        # App entry point & service registration
+├── AnLar.HtmlToPdf.sln
+└── AnLar.HtmlToPdf/
+    ├── AnLar.HtmlToPdf.csproj
+    ├── Program.cs                        # App entry point & service registration
+    ├── Controllers/
+    │   └── PdfController.cs              # POST /pdf endpoint
+    ├── Services/
+    │   └── AccessiblePdfGenerator.cs     # Core PDF generation & accessibility logic
+    ├── DTOs/
+    │   └── PdfRequest.cs                 # Request model
+    └── Fonts/
+        ├── LiberationSerif-Regular.ttf
+        ├── LiberationSerif-Bold.ttf
+        ├── LiberationSerif-Italic.ttf
+        ├── LiberationSerif-BoldItalic.ttf
+        └── LICENSE-LiberationFonts.txt
 ```
 
 ## Build & Publish
@@ -84,7 +95,18 @@ dotnet build -c Release
 
 # Publish for deployment
 dotnet publish -c Release
+
+# Publish for Linux (e.g. Azure Web App)
+dotnet publish -c Release -r linux-x64
 ```
+
+## Dependencies
+
+| Package             | Version | Purpose                              |
+|---------------------|---------|--------------------------------------|
+| `itext7.pdfhtml`    | 4.0.3   | HTML-to-PDF conversion with iText 7  |
+
+Fonts are [Liberation Serif](https://github.com/liberationfonts/liberation-fonts) licensed under the SIL Open Font License.
 
 ## Postman Example
 
@@ -98,7 +120,6 @@ BODY (raw):
   "documentLanguage": "en-US"
 }
 ```
-
 ## License
 
 See [LICENSE](LICENSE) for details.
