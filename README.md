@@ -91,11 +91,13 @@ dotnet publish -c Release
 POST: https://htmltopdfdevlinux.azurewebsites.net/pdf
 
 BODY (raw):
+```
 {
   "htmlContent": "<h1>Hello World</h1><p>Some content here.</p>",
   "documentTitle": "My Document",
   "documentLanguage": "en-US"
 }
+```
 
 ## License
 
