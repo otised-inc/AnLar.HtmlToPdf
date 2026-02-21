@@ -9,6 +9,7 @@ using iText.Layout.Font;
 using iText.StyledXmlParser.Node;
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace AnLar.HtmlToPdf.Services
 {
@@ -36,8 +37,11 @@ namespace AnLar.HtmlToPdf.Services
 
                 var converterProperties = new ConverterProperties();
                 var fontProvider = new FontProvider();
-                var fontsDir = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
-                fontProvider.AddDirectory(fontsDir);
+                fontProvider.AddStandardPdfFonts();
+                foreach (var dir in GetSystemFontDirectories())
+                {
+                    fontProvider.AddDirectory(dir);
+                }
                 converterProperties.SetFontProvider(fontProvider);
                 converterProperties.SetTagWorkerFactory(new AccessibleTagWorkerFactory());
                 converterProperties.SetOutlineHandler(OutlineHandler.CreateStandardHandler());
@@ -48,6 +52,25 @@ namespace AnLar.HtmlToPdf.Services
             }
 
             return memoryStream.ToArray();
+        }
+
+        private static string[] GetSystemFontDirectories()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var winFonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+                return string.IsNullOrEmpty(winFonts) ? [] : [winFonts];
+            }
+
+            // Linux font directories (Azure Web Apps, containers, etc.)
+            string[] linuxCandidates = ["/usr/share/fonts", "/usr/local/share/fonts", "/home/.fonts"];
+            var existing = new System.Collections.Generic.List<string>();
+            foreach (var dir in linuxCandidates)
+            {
+                if (Directory.Exists(dir))
+                    existing.Add(dir);
+            }
+            return [.. existing];
         }
 
         private static void SetPdfUaXmpMetadata(PdfDocument pdfDocument, string documentTitle)
