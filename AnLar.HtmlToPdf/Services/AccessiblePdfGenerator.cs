@@ -7,14 +7,23 @@ using iText.Kernel.XMP;
 using iText.Layout;
 using iText.Layout.Font;
 using iText.StyledXmlParser.Node;
+using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace AnLar.HtmlToPdf.Services
 {
     public class AccessiblePdfGenerator
     {
+        private readonly ILogger<AccessiblePdfGenerator> _logger;
+
+        public AccessiblePdfGenerator(ILogger<AccessiblePdfGenerator> logger)
+        {
+            _logger = logger;
+        }
+
         public byte[] GenerateAccessiblePdfFromHtml(string htmlContent, string documentTitle, string documentLanguage = "en-US")
         {
             using var memoryStream = new MemoryStream();
@@ -37,9 +46,10 @@ namespace AnLar.HtmlToPdf.Services
 
                 var converterProperties = new ConverterProperties();
                 var fontProvider = new FontProvider();
-                fontProvider.AddStandardPdfFonts();
+                AddBundledFonts(fontProvider);
                 foreach (var dir in GetSystemFontDirectories())
                 {
+                    _logger.LogInformation("Adding system font directory: {Dir}", dir);
                     fontProvider.AddDirectory(dir);
                 }
                 converterProperties.SetFontProvider(fontProvider);
@@ -52,6 +62,90 @@ namespace AnLar.HtmlToPdf.Services
             }
 
             return memoryStream.ToArray();
+        }
+
+        private void AddBundledFonts(FontProvider fontProvider)
+        {
+            int fontsAdded = 0;
+
+            // Strategy 1: Try Content files from known deployment paths
+            var assembly = typeof(AccessiblePdfGenerator).Assembly;
+            var assemblyDir = Path.GetDirectoryName(assembly.Location) ?? "";
+            string[] candidateDirs =
+            [
+                Path.Combine(AppContext.BaseDirectory, "Fonts"),
+                Path.Combine(assemblyDir, "Fonts"),
+                Path.Combine(Directory.GetCurrentDirectory(), "Fonts"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Fonts"),
+                // Azure Web App common paths
+                "/home/site/wwwroot/Fonts",
+            ];
+
+            foreach (var dir in candidateDirs)
+            {
+                if (!Directory.Exists(dir))
+                {
+                    _logger.LogDebug("Font dir not found: {Dir}", dir);
+                    continue;
+                }
+
+                var ttfFiles = Directory.GetFiles(dir, "*.ttf");
+                if (ttfFiles.Length == 0)
+                    continue;
+
+                _logger.LogInformation("Found {Count} fonts in: {Dir}", ttfFiles.Length, dir);
+                fontProvider.AddDirectory(dir);
+                fontsAdded += ttfFiles.Length;
+                break; // Found fonts, no need to check other paths
+            }
+
+            // Strategy 2: Try embedded resources extracted to temp dir
+            if (fontsAdded == 0)
+            {
+                _logger.LogInformation("No Content font files found, trying embedded resources...");
+                fontsAdded = ExtractAndAddEmbeddedFonts(fontProvider);
+            }
+
+            _logger.LogInformation("Total bundled fonts added: {Count}", fontsAdded);
+        }
+
+        private int ExtractAndAddEmbeddedFonts(FontProvider fontProvider)
+        {
+            var assembly = typeof(AccessiblePdfGenerator).Assembly;
+            var allResources = assembly.GetManifestResourceNames();
+            var ttfResources = allResources.Where(r => r.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)).ToArray();
+
+            _logger.LogInformation(
+                "Assembly: {Name}, location: {Location}, total resources: {Total}, ttf resources: {Ttf}",
+                assembly.GetName().Name, assembly.Location, allResources.Length, ttfResources.Length);
+
+            if (ttfResources.Length == 0)
+                return 0;
+
+            var tempDir = Path.Combine(Path.GetTempPath(), "AnLar.HtmlToPdf.Fonts");
+            Directory.CreateDirectory(tempDir);
+
+            int count = 0;
+            foreach (var resourceName in ttfResources)
+            {
+                var targetPath = Path.Combine(tempDir, resourceName);
+                if (!File.Exists(targetPath))
+                {
+                    using var stream = assembly.GetManifestResourceStream(resourceName);
+                    if (stream == null)
+                    {
+                        _logger.LogWarning("GetManifestResourceStream returned null for {Resource}", resourceName);
+                        continue;
+                    }
+                    using var fs = File.Create(targetPath);
+                    stream.CopyTo(fs);
+                }
+                fontProvider.AddFont(targetPath);
+                count++;
+                _logger.LogInformation("Loaded embedded font: {Resource} ({Size} bytes)", resourceName, new FileInfo(targetPath).Length);
+            }
+
+            return count;
         }
 
         private static string[] GetSystemFontDirectories()
@@ -111,7 +205,7 @@ namespace AnLar.HtmlToPdf.Services
         }}
     </style>
 </head>
-<body style=""font-family: 'Times New Roman', Times, serif; font-size: 16px;"">
+<body style=""font-family: 'Liberation Serif', 'Times New Roman', Times, serif; font-size: 16px;"">
 {htmlContent}
 </body>
 </html>";
