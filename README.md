@@ -1,6 +1,6 @@
 # AnLar.HtmlToPdf
 
-An ASP.NET Core Web API that converts HTML content into accessible PDF documents compliant with the **PDF/UA** (Universal Accessibility) standard. Built with [iText 7](https://itextpdf.com/) for reliable, structured PDF generation suitable for screen readers and assistive technologies.
+An ASP.NET Core Web API that converts HTML content into accessible PDF documents compliant with the **PDF/UA** (Universal Accessibility) standard. Built with [iText](https://itextpdf.com/) for reliable, structured PDF generation suitable for screen readers and assistive technologies.
 
 ## Features
 
@@ -48,10 +48,10 @@ Converts HTML content to an accessible PDF.
 }
 ```
 
-| Field              | Type   | Required | Default      | Description                          |
-|--------------------|--------|----------|--------------|--------------------------------------|
-| `htmlContent`      | string | Yes      | —            | HTML content to convert              |
-| `documentTitle`    | string | No       | `"Untitled"` | Title embedded in PDF metadata       |
+| Field              | Type   | Required | Default      | Description                                  |
+|--------------------|--------|----------|--------------|----------------------------------------------|
+| `htmlContent`      | string | Yes      | —            | HTML content to convert                      |
+| `documentTitle`    | string | No       | `"Untitled"` | Title embedded in PDF metadata               |
 | `documentLanguage` | string | No       | `"en-US"`    | BCP 47 language tag (e.g. `en-US`, `nl-NL`) |
 
 **Response:** `application/pdf` binary stream.
@@ -73,12 +73,16 @@ AnLar.HtmlToPdf/
 └── AnLar.HtmlToPdf/
     ├── AnLar.HtmlToPdf.csproj
     ├── Program.cs                        # App entry point & service registration
+    ├── appsettings.json
+    ├── appsettings.Development.json
     ├── Controllers/
     │   └── PdfController.cs              # POST /pdf endpoint
     ├── Services/
     │   └── AccessiblePdfGenerator.cs     # Core PDF generation & accessibility logic
     ├── DTOs/
     │   └── PdfRequest.cs                 # Request model
+    ├── Properties/
+    │   └── launchSettings.json
     └── Fonts/
         ├── LiberationSerif-Regular.ttf
         ├── LiberationSerif-Bold.ttf
@@ -102,9 +106,10 @@ dotnet publish -c Release -r linux-x64
 
 ## Dependencies
 
-| Package             | Version | Purpose                              |
-|---------------------|---------|--------------------------------------|
-| `itext7.pdfhtml`    | 4.0.3   | HTML-to-PDF conversion with iText 7  |
+| Package                          | Version | Purpose                                   |
+|----------------------------------|---------|-------------------------------------------|
+| `itext.pdfhtml`                  | 6.3.1   | HTML-to-PDF conversion with iText         |
+| `itext.bouncy-castle-adapter`    | 9.5.0   | Cryptography adapter required by iText    |
 
 Fonts are [Liberation Serif](https://github.com/liberationfonts/liberation-fonts) licensed under the SIL Open Font License.
 
@@ -120,6 +125,7 @@ BODY (raw):
   "documentLanguage": "en-US"
 }
 ```
+
 ## License
 
 See [LICENSE](LICENSE) for details.
