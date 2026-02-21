@@ -169,10 +169,7 @@ namespace AnLar.HtmlToPdf.Services
 
         private static void SetPdfUaXmpMetadata(PdfDocument pdfDocument, string documentTitle)
         {
-            byte[] existingXmp = pdfDocument.GetXmpMetadata();
-            XMPMeta xmpMeta = existingXmp != null
-                ? XMPMetaFactory.ParseFromBuffer(existingXmp)
-                : XMPMetaFactory.Create();
+            XMPMeta xmpMeta = pdfDocument.GetXmpMetadata() ?? XMPMetaFactory.Create();
 
             const string pdfUaIdSchema = "http://www.aiim.org/pdfua/ns/id/";
             const string pdfUaIdPrefix = "pdfuaid";
