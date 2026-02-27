@@ -3,6 +3,7 @@ using iText.Html2pdf.Attach;
 using iText.Html2pdf.Attach.Impl;
 using iText.Html2pdf.Attach.Impl.Tags;
 using iText.Kernel.Pdf;
+using iText.Kernel.Pdf.Tagging;
 using iText.Kernel.XMP;
 using iText.Layout;
 using iText.Layout.Font;
@@ -200,6 +201,10 @@ namespace AnLar.HtmlToPdf.Services
         @page {{
             margin: 10mm;
         }}
+        img {{
+            max-width: 100%;
+            height: auto;
+        }}
     </style>
 </head>
 <body style=""font-family: 'Liberation Serif', 'Times New Roman', Times, serif; font-size: 16px;"">
@@ -221,6 +226,10 @@ namespace AnLar.HtmlToPdf.Services
                     name == "h4" || name == "h5" || name == "h6")
                 {
                     return new AccessibleHeadingTagWorker(tag, context);
+                }
+                if (name == "img")
+                {
+                    return new AccessibleImageTagWorker(tag, context);
                 }
                 return null;
             }
@@ -248,6 +257,57 @@ namespace AnLar.HtmlToPdf.Services
                 {
                     paragraph.GetAccessibilityProperties().SetRole(headingRole);
                 }
+                return result;
+            }
+        }
+
+        /// <summary>
+        /// Processes img tags to ensure 508/PDF-UA compliance for inline images.
+        /// Sets the Figure role and alternate description from the HTML alt attribute.
+        /// Decorative images (alt="") are excluded from the structure tree.
+        /// Images without an alt attribute receive a fallback description.
+        /// </summary>
+        private class AccessibleImageTagWorker : ImgTagWorker
+        {
+            private readonly IElementNode _element;
+
+            public AccessibleImageTagWorker(IElementNode element, ProcessorContext context)
+                : base(element, context)
+            {
+                _element = element;
+            }
+
+            public override IPropertyContainer GetElementResult()
+            {
+                var result = base.GetElementResult();
+
+                if (result is iText.Layout.Element.Image image)
+                {
+                    string? altText = _element.GetAttribute("alt");
+                    var accessibilityProperties = image.GetAccessibilityProperties();
+
+                    if (altText != null && altText.Length == 0)
+                    {
+                        // Empty alt="" indicates a decorative image.
+                        // For PDF/UA, decorative content should not appear in the
+                        // structure tree. Setting the role to null marks it as an artifact.
+                        accessibilityProperties.SetRole(null);
+                    }
+                    else if (!string.IsNullOrEmpty(altText))
+                    {
+                        // Meaningful image with alt text
+                        accessibilityProperties.SetRole(StandardRoles.FIGURE);
+                        accessibilityProperties.SetAlternateDescription(altText);
+                    }
+                    else
+                    {
+                        // No alt attribute — set Figure role with fallback description
+                        // to maintain 508 compliance
+                        accessibilityProperties.SetRole(StandardRoles.FIGURE);
+                        accessibilityProperties.SetAlternateDescription("Image");
+                    }
+                }
+
                 return result;
             }
         }
