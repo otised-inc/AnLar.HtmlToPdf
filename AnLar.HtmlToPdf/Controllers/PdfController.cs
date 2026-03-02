@@ -32,7 +32,8 @@ namespace AnLar.HtmlToPdf.Controllers
                 request.MarginTop ?? 10f,
                 request.MarginRight ?? 10f,
                 request.MarginBottom ?? 10f,
-                request.MarginLeft ?? 10f);
+                request.MarginLeft ?? 10f,
+                request.ShowPageNumbers ?? false);
 
             return File(pdfBytes, "application/pdf");
         }

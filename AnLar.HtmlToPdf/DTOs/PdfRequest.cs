@@ -30,5 +30,10 @@ namespace AnLar.HtmlToPdf.DTOs
         /// Left page margin in millimeters. Defaults to 10.
         /// </summary>
         public float? MarginLeft { get; set; }
+
+        /// <summary>
+        /// When true, adds "Page X of Y" centered at the bottom of each page. Defaults to false.
+        /// </summary>
+        public bool? ShowPageNumbers { get; set; }
     }
 }
