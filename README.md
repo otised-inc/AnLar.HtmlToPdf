@@ -115,12 +115,10 @@ Fonts are [Liberation Serif](https://github.com/liberationfonts/liberation-fonts
 
 ## Postman Example
 
-POST: https://htmltopdfdevlinux.azurewebsites.net/pdf
-
 BODY (raw):
 ```
 {
-  "htmlContent": "<h1>Hello World</h1><p>Some content here.</p>",
+  "htmlContent": "<h1>Hello World <img src=\"https://placehold.co/60\" width=\"60\" height=\"60\" alt=\"Logo\" style=\"vertical-align: middle; margin-left: 10px;\"></h1><p>Some content here.</p><table border=\"1\"><tr><td>Row1 Col1</td><td>Row1 Col2</td><td>Row1 Col3</td></tr><tr><td>Row2 Col1</td><td>Row2 Col2</td><td>Row2 Col3</td></tr><tr><td>Row3 Col1</td><td>Row3 Col2</td><td>Row3 Col3</td></tr></table><p>This is the ending paragraph</p>",
   "documentTitle": "My Document",
   "documentLanguage": "en-US"
 }
