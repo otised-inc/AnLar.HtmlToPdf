@@ -2,7 +2,10 @@ using iText.Html2pdf;
 using iText.Html2pdf.Attach;
 using iText.Html2pdf.Attach.Impl;
 using iText.Html2pdf.Attach.Impl.Tags;
+using iText.IO.Font.Constants;
+using iText.Kernel.Font;
 using iText.Kernel.Pdf;
+using iText.Kernel.Pdf.Canvas;
 using iText.Kernel.Pdf.Tagging;
 using iText.Kernel.XMP;
 using iText.Layout;
@@ -25,7 +28,16 @@ namespace AnLar.HtmlToPdf.Services
             _logger = logger;
         }
 
-        public byte[] GenerateAccessiblePdfFromHtml(string htmlContent, string documentTitle, string documentLanguage = "en-US")
+        public byte[] GenerateAccessiblePdfFromHtml(
+            string htmlContent,
+            string documentTitle,
+            string documentLanguage = "en-US",
+            string pageOrientation = "portrait",
+            float marginTop = 10f,
+            float marginRight = 10f,
+            float marginBottom = 10f,
+            float marginLeft = 10f,
+            bool showPageNumbers = false)
         {
             using var memoryStream = new MemoryStream();
 
@@ -57,12 +69,55 @@ namespace AnLar.HtmlToPdf.Services
                 converterProperties.SetTagWorkerFactory(new AccessibleTagWorkerFactory());
                 converterProperties.SetOutlineHandler(OutlineHandler.CreateStandardHandler());
 
-                var wrappedHtml = WrapInHtmlDocument(htmlContent, documentTitle, documentLanguage);
+                var wrappedHtml = WrapInHtmlDocument(htmlContent, documentTitle, documentLanguage, pageOrientation, marginTop, marginRight, marginBottom, marginLeft);
 
                 HtmlConverter.ConvertToPdf(wrappedHtml, pdfDocument, converterProperties);
+                // HtmlConverter closes the PdfDocument after conversion
             }
 
-            return memoryStream.ToArray();
+            if (!showPageNumbers)
+                return memoryStream.ToArray();
+
+            // Second pass: stamp page numbers onto the already-generated PDF.
+            // A new PdfDocument in stamper mode (reader+writer) must be used because
+            // HtmlConverter closes the original document before we can query page count.
+            using var inputStream = new MemoryStream(memoryStream.ToArray());
+            using var outputStream = new MemoryStream();
+            using (var reader = new PdfReader(inputStream))
+            using (var stampWriter = new PdfWriter(outputStream))
+            using (var stampDoc = new PdfDocument(reader, stampWriter))
+            {
+                AddPageNumbers(stampDoc);
+            }
+
+            return outputStream.ToArray();
+        }
+
+        private static void AddPageNumbers(PdfDocument pdfDocument)
+        {
+            int totalPages = pdfDocument.GetNumberOfPages();
+            var font = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+            const float fontSize = 9f;
+
+            for (int i = 1; i <= totalPages; i++)
+            {
+                var page = pdfDocument.GetPage(i);
+                var pageSize = page.GetPageSize();
+                var text = $"Page {i} of {totalPages}";
+                float textWidth = font.GetWidth(text, fontSize);
+                float x = (pageSize.GetWidth() - textWidth) / 2f;
+
+                var canvas = new PdfCanvas(page);
+                // Mark as artifact so screen readers and PDF/UA validators ignore it
+                canvas.BeginMarkedContent(PdfName.Artifact);
+                canvas.SetFontAndSize(font, fontSize)
+                      .BeginText()
+                      .MoveText(x, 10f)
+                      .ShowText(text)
+                      .EndText();
+                canvas.EndMarkedContent();
+                canvas.Release();
+            }
         }
 
         private void AddBundledFonts(FontProvider fontProvider)
@@ -184,13 +239,25 @@ namespace AnLar.HtmlToPdf.Services
             pdfDocument.SetXmpMetadata(xmpMeta);
         }
 
-        private static string WrapInHtmlDocument(string htmlContent, string documentTitle, string documentLanguage)
+        private static string WrapInHtmlDocument(
+            string htmlContent,
+            string documentTitle,
+            string documentLanguage,
+            string pageOrientation,
+            float marginTop,
+            float marginRight,
+            float marginBottom,
+            float marginLeft)
         {
             if (htmlContent.TrimStart().StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase)
                 || htmlContent.TrimStart().StartsWith("<html", StringComparison.OrdinalIgnoreCase))
             {
                 return htmlContent;
             }
+
+            var orientation = pageOrientation.Equals("landscape", StringComparison.OrdinalIgnoreCase)
+                ? "landscape"
+                : "portrait";
 
             return $@"<!DOCTYPE html>
 <html lang=""{documentLanguage}"">
@@ -199,7 +266,8 @@ namespace AnLar.HtmlToPdf.Services
     <title>{System.Net.WebUtility.HtmlEncode(documentTitle)}</title>
     <style>
         @page {{
-            margin: 10mm;
+            size: {orientation};
+            margin: {marginTop}mm {marginRight}mm {marginBottom}mm {marginLeft}mm;
         }}
         img {{
             max-width: 100%;

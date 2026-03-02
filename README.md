@@ -11,6 +11,8 @@ An ASP.NET Core Web API that converts HTML content into accessible PDF documents
 - **Bundled Fonts** — Ships with Liberation Serif (Regular, Bold, Italic, Bold Italic) so PDFs render consistently even on minimal Linux containers
 - **Cross-Platform Font Resolution** — Multi-strategy font loading: bundled content files, embedded assembly resources, and system font directories on Windows and Linux
 - **Smart HTML Wrapping** — Automatically wraps partial HTML snippets in a complete document with `@page` margins, language attribute, and default serif typography
+- **Page Layout Control** — Configurable page orientation (portrait/landscape) and per-side margins in millimeters
+- **Optional Page Numbers** — Adds centered "Page X of Y" footers, marked as PDF artifacts to preserve accessibility compliance
 
 ## Prerequisites
 
@@ -44,15 +46,27 @@ Converts HTML content to an accessible PDF.
 {
   "htmlContent": "<h1>Hello World</h1><p>This is a sample document.</p>",
   "documentTitle": "My Document",
-  "documentLanguage": "en-US"
+  "documentLanguage": "en-US",
+  "pageOrientation": "portrait",
+  "marginTop": 10,
+  "marginRight": 10,
+  "marginBottom": 10,
+  "marginLeft": 10,
+  "showPageNumbers": false
 }
 ```
 
-| Field              | Type   | Required | Default      | Description                                  |
-|--------------------|--------|----------|--------------|----------------------------------------------|
-| `htmlContent`      | string | Yes      | —            | HTML content to convert                      |
-| `documentTitle`    | string | No       | `"Untitled"` | Title embedded in PDF metadata               |
-| `documentLanguage` | string | No       | `"en-US"`    | BCP 47 language tag (e.g. `en-US`, `nl-NL`) |
+| Field              | Type    | Required | Default        | Description                                               |
+|--------------------|---------|----------|----------------|-----------------------------------------------------------|
+| `htmlContent`      | string  | Yes      | —              | HTML content to convert (fragment or full document)       |
+| `documentTitle`    | string  | No       | `"Untitled"`   | Title embedded in PDF metadata                            |
+| `documentLanguage` | string  | No       | `"en-US"`      | BCP 47 language tag (e.g. `en-US`, `nl-NL`)              |
+| `pageOrientation`  | string  | No       | `"portrait"`   | Page orientation: `"portrait"` or `"landscape"`           |
+| `marginTop`        | float   | No       | `10`           | Top margin in millimeters                                 |
+| `marginRight`      | float   | No       | `10`           | Right margin in millimeters                               |
+| `marginBottom`     | float   | No       | `10`           | Bottom margin in millimeters                              |
+| `marginLeft`       | float   | No       | `10`           | Left margin in millimeters                                |
+| `showPageNumbers`  | boolean | No       | `false`        | When `true`, adds "Page X of Y" centered at the bottom of each page |
 
 **Response:** `application/pdf` binary stream.
 
@@ -61,7 +75,7 @@ Converts HTML content to an accessible PDF.
 ```bash
 curl -X POST https://localhost:50670/pdf \
   -H "Content-Type: application/json" \
-  -d '{"htmlContent":"<h1>Report</h1><p>Content here.</p>","documentTitle":"Report","documentLanguage":"en-US"}' \
+  -d '{"htmlContent":"<h1>Report</h1><p>Content here.</p>","documentTitle":"Report","documentLanguage":"en-US","showPageNumbers":true}' \
   -o output.pdf
 ```
 
@@ -120,7 +134,13 @@ BODY (raw):
 {
   "htmlContent": "<h1>Hello World <img src=\"https://placehold.co/60\" width=\"60\" height=\"60\" alt=\"Logo\" style=\"vertical-align: middle; margin-left: 10px;\"></h1><p>Some content here.</p><table border=\"1\"><tr><td>Row1 Col1</td><td>Row1 Col2</td><td>Row1 Col3</td></tr><tr><td>Row2 Col1</td><td>Row2 Col2</td><td>Row2 Col3</td></tr><tr><td>Row3 Col1</td><td>Row3 Col2</td><td>Row3 Col3</td></tr></table><p>This is the ending paragraph</p>",
   "documentTitle": "My Document",
-  "documentLanguage": "en-US"
+  "documentLanguage": "en-US",
+  "pageOrientation": "portrait",
+  "marginTop": 10,
+  "marginRight": 10,
+  "marginBottom": 10,
+  "marginLeft": 10,
+  "showPageNumbers": true
 }
 ```
 
