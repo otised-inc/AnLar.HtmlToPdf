@@ -25,7 +25,15 @@ namespace AnLar.HtmlToPdf.Services
             _logger = logger;
         }
 
-        public byte[] GenerateAccessiblePdfFromHtml(string htmlContent, string documentTitle, string documentLanguage = "en-US")
+        public byte[] GenerateAccessiblePdfFromHtml(
+            string htmlContent,
+            string documentTitle,
+            string documentLanguage = "en-US",
+            string pageOrientation = "portrait",
+            float marginTop = 10f,
+            float marginRight = 10f,
+            float marginBottom = 10f,
+            float marginLeft = 10f)
         {
             using var memoryStream = new MemoryStream();
 
@@ -57,7 +65,7 @@ namespace AnLar.HtmlToPdf.Services
                 converterProperties.SetTagWorkerFactory(new AccessibleTagWorkerFactory());
                 converterProperties.SetOutlineHandler(OutlineHandler.CreateStandardHandler());
 
-                var wrappedHtml = WrapInHtmlDocument(htmlContent, documentTitle, documentLanguage);
+                var wrappedHtml = WrapInHtmlDocument(htmlContent, documentTitle, documentLanguage, pageOrientation, marginTop, marginRight, marginBottom, marginLeft);
 
                 HtmlConverter.ConvertToPdf(wrappedHtml, pdfDocument, converterProperties);
             }
@@ -184,13 +192,25 @@ namespace AnLar.HtmlToPdf.Services
             pdfDocument.SetXmpMetadata(xmpMeta);
         }
 
-        private static string WrapInHtmlDocument(string htmlContent, string documentTitle, string documentLanguage)
+        private static string WrapInHtmlDocument(
+            string htmlContent,
+            string documentTitle,
+            string documentLanguage,
+            string pageOrientation,
+            float marginTop,
+            float marginRight,
+            float marginBottom,
+            float marginLeft)
         {
             if (htmlContent.TrimStart().StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase)
                 || htmlContent.TrimStart().StartsWith("<html", StringComparison.OrdinalIgnoreCase))
             {
                 return htmlContent;
             }
+
+            var orientation = pageOrientation.Equals("landscape", StringComparison.OrdinalIgnoreCase)
+                ? "landscape"
+                : "portrait";
 
             return $@"<!DOCTYPE html>
 <html lang=""{documentLanguage}"">
@@ -199,7 +219,8 @@ namespace AnLar.HtmlToPdf.Services
     <title>{System.Net.WebUtility.HtmlEncode(documentTitle)}</title>
     <style>
         @page {{
-            margin: 10mm;
+            size: {orientation};
+            margin: {marginTop}mm {marginRight}mm {marginBottom}mm {marginLeft}mm;
         }}
         img {{
             max-width: 100%;
