@@ -5,7 +5,9 @@ using iText.Html2pdf.Attach.Impl.Tags;
 using iText.IO.Font.Constants;
 using iText.Kernel.Font;
 using iText.Kernel.Pdf;
+using iText.Kernel.Colors;
 using iText.Kernel.Pdf.Canvas;
+using iText.Kernel.Pdf.Extgstate;
 using iText.Kernel.Pdf.Tagging;
 using iText.Kernel.XMP;
 using iText.Layout;
@@ -37,7 +39,8 @@ namespace AnLar.HtmlToPdf.Services
             float marginRight = 10f,
             float marginBottom = 10f,
             float marginLeft = 10f,
-            bool showPageNumbers = false)
+            bool showPageNumbers = false,
+            string? watermark = null)
         {
             using var memoryStream = new MemoryStream();
 
@@ -75,10 +78,12 @@ namespace AnLar.HtmlToPdf.Services
                 // HtmlConverter closes the PdfDocument after conversion
             }
 
-            if (!showPageNumbers)
+            bool needsStamping = showPageNumbers || !string.IsNullOrWhiteSpace(watermark);
+
+            if (!needsStamping)
                 return memoryStream.ToArray();
 
-            // Second pass: stamp page numbers onto the already-generated PDF.
+            // Second pass: stamp page numbers and/or watermark onto the already-generated PDF.
             // A new PdfDocument in stamper mode (reader+writer) must be used because
             // HtmlConverter closes the original document before we can query page count.
             using var inputStream = new MemoryStream(memoryStream.ToArray());
@@ -87,7 +92,10 @@ namespace AnLar.HtmlToPdf.Services
             using (var stampWriter = new PdfWriter(outputStream))
             using (var stampDoc = new PdfDocument(reader, stampWriter))
             {
-                AddPageNumbers(stampDoc);
+                if (!string.IsNullOrWhiteSpace(watermark))
+                    AddWatermark(stampDoc, watermark!);
+                if (showPageNumbers)
+                    AddPageNumbers(stampDoc);
             }
 
             return outputStream.ToArray();
@@ -116,6 +124,41 @@ namespace AnLar.HtmlToPdf.Services
                       .ShowText(text)
                       .EndText();
                 canvas.EndMarkedContent();
+                canvas.Release();
+            }
+        }
+
+        private static void AddWatermark(PdfDocument pdfDocument, string watermarkText)
+        {
+            int totalPages = pdfDocument.GetNumberOfPages();
+            var font = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
+            const float fontSize = 60f;
+            var grayColor = new DeviceRgb(200, 200, 200);
+            var gs = new PdfExtGState().SetFillOpacity(0.3f);
+
+            for (int i = 1; i <= totalPages; i++)
+            {
+                var page = pdfDocument.GetPage(i);
+                var pageSize = page.GetPageSize();
+                float x = pageSize.GetWidth() / 2f;
+                float y = pageSize.GetHeight() / 2f;
+
+                var canvas = new PdfCanvas(page.NewContentStreamBefore(), page.GetResources(), pdfDocument);
+                canvas.SaveState();
+                canvas.SetExtGState(gs);
+                // Mark as artifact so screen readers ignore the watermark
+                canvas.BeginMarkedContent(PdfName.Artifact);
+                canvas.SetFontAndSize(font, fontSize)
+                      .SetColor(grayColor, true)
+                      .BeginText()
+                      .SetTextMatrix(
+                          (float)Math.Cos(Math.PI / 4), (float)Math.Sin(Math.PI / 4),
+                          -(float)Math.Sin(Math.PI / 4), (float)Math.Cos(Math.PI / 4),
+                          x, y)
+                      .ShowText(watermarkText)
+                      .EndText();
+                canvas.EndMarkedContent();
+                canvas.RestoreState();
                 canvas.Release();
             }
         }
