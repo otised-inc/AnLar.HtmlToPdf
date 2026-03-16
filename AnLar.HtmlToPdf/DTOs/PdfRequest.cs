@@ -35,5 +35,11 @@ namespace AnLar.HtmlToPdf.DTOs
         /// When true, adds "Page X of Y" centered at the bottom of each page. Defaults to false.
         /// </summary>
         public bool? ShowPageNumbers { get; set; }
+
+        /// <summary>
+        /// Optional watermark text to render diagonally across each page (e.g. "DRAFT", "CONFIDENTIAL").
+        /// When null or empty, no watermark is added.
+        /// </summary>
+        public string? Watermark { get; set; }
     }
 }
