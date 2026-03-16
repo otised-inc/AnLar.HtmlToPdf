@@ -140,8 +140,15 @@ namespace AnLar.HtmlToPdf.Services
             {
                 var page = pdfDocument.GetPage(i);
                 var pageSize = page.GetPageSize();
-                float x = pageSize.GetWidth() / 2f;
-                float y = pageSize.GetHeight() / 2f;
+                float centerX = pageSize.GetWidth() / 2f;
+                float centerY = pageSize.GetHeight() / 2f;
+
+                // Offset by half the text width so the watermark is visually centered
+                float textWidth = font.GetWidth(watermarkText, fontSize);
+                float cos = (float)Math.Cos(Math.PI / 4);
+                float sin = (float)Math.Sin(Math.PI / 4);
+                float x = centerX - (textWidth / 2f) * cos;
+                float y = centerY - (textWidth / 2f) * sin;
 
                 var canvas = new PdfCanvas(page.NewContentStreamBefore(), page.GetResources(), pdfDocument);
                 canvas.SaveState();
@@ -151,10 +158,7 @@ namespace AnLar.HtmlToPdf.Services
                 canvas.SetFontAndSize(font, fontSize)
                       .SetColor(grayColor, true)
                       .BeginText()
-                      .SetTextMatrix(
-                          (float)Math.Cos(Math.PI / 4), (float)Math.Sin(Math.PI / 4),
-                          -(float)Math.Sin(Math.PI / 4), (float)Math.Cos(Math.PI / 4),
-                          x, y)
+                      .SetTextMatrix(cos, sin, -sin, cos, x, y)
                       .ShowText(watermarkText)
                       .EndText();
                 canvas.EndMarkedContent();
