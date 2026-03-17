@@ -13,6 +13,8 @@ An ASP.NET Core Web API that converts HTML content into accessible PDF documents
 - **Smart HTML Wrapping** — Automatically wraps partial HTML snippets in a complete document with `@page` margins, language attribute, and default serif typography
 - **Page Layout Control** — Configurable page orientation (portrait/landscape) and per-side margins in millimeters
 - **Optional Page Numbers** — Adds centered "Page X of Y" footers, marked as PDF artifacts to preserve accessibility compliance
+- **Watermark Support** — Optional diagonal watermark text (e.g. "DRAFT", "CONFIDENTIAL") rendered in light gray with 30% opacity, marked as a PDF artifact so it doesn't interfere with screen readers
+- **Inline Image Support** — Handles base64-encoded and URL-referenced images with full 508/PDF-UA compliance: images with `alt` text are tagged as Figure elements, empty `alt=""` marks images as decorative (excluded from structure tree), and missing `alt` attributes receive a fallback description
 
 ## Prerequisites
 
@@ -52,7 +54,8 @@ Converts HTML content to an accessible PDF.
   "marginRight": 10,
   "marginBottom": 10,
   "marginLeft": 10,
-  "showPageNumbers": false
+  "showPageNumbers": false,
+  "watermark": "DRAFT"
 }
 ```
 
@@ -67,6 +70,7 @@ Converts HTML content to an accessible PDF.
 | `marginBottom`     | float   | No       | `10`           | Bottom margin in millimeters                              |
 | `marginLeft`       | float   | No       | `10`           | Left margin in millimeters                                |
 | `showPageNumbers`  | boolean | No       | `false`        | When `true`, adds "Page X of Y" centered at the bottom of each page |
+| `watermark`        | string  | No       | `null`         | Diagonal watermark text rendered on every page (e.g. `"DRAFT"`, `"CONFIDENTIAL"`) |
 
 **Response:** `application/pdf` binary stream.
 
@@ -75,7 +79,7 @@ Converts HTML content to an accessible PDF.
 ```bash
 curl -X POST https://localhost:50670/pdf \
   -H "Content-Type: application/json" \
-  -d '{"htmlContent":"<h1>Report</h1><p>Content here.</p>","documentTitle":"Report","documentLanguage":"en-US","showPageNumbers":true}' \
+  -d '{"htmlContent":"<h1>Report</h1><p>Content here.</p>","documentTitle":"Report","documentLanguage":"en-US","showPageNumbers":true,"watermark":"DRAFT"}' \
   -o output.pdf
 ```
 
@@ -103,6 +107,8 @@ AnLar.HtmlToPdf/
         ├── LiberationSerif-Italic.ttf
         ├── LiberationSerif-BoldItalic.ttf
         └── LICENSE-LiberationFonts.txt
+AnLar.HtmlToPdf.Tests/
+    └── InlineImageTests.cs            # Unit tests for inline image handling
 ```
 
 ## Build & Publish
@@ -140,7 +146,8 @@ BODY (raw):
   "marginRight": 10,
   "marginBottom": 10,
   "marginLeft": 10,
-  "showPageNumbers": true
+  "showPageNumbers": true,
+  "watermark": "DRAFT"
 }
 ```
 
