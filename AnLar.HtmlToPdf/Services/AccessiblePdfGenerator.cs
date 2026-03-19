@@ -276,13 +276,13 @@ namespace AnLar.HtmlToPdf.Services
 
             // Strategy 1: Try Content files from known deployment paths
             var assembly = typeof(AccessiblePdfGenerator).Assembly;
-            var assemblyDir = Path.GetDirectoryName(assembly.Location) ?? "";
+            var assemblyDir = System.IO.Path.GetDirectoryName(assembly.Location) ?? "";
             string[] candidateDirs =
             [
-                Path.Combine(AppContext.BaseDirectory, "Fonts"),
-                Path.Combine(assemblyDir, "Fonts"),
-                Path.Combine(Directory.GetCurrentDirectory(), "Fonts"),
-                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Fonts"),
+                System.IO.Path.Combine(AppContext.BaseDirectory, "Fonts"),
+                System.IO.Path.Combine(assemblyDir, "Fonts"),
+                System.IO.Path.Combine(Directory.GetCurrentDirectory(), "Fonts"),
+                System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Fonts"),
                 // Azure Web App common paths
                 "/home/site/wwwroot/Fonts",
             ];
@@ -328,13 +328,13 @@ namespace AnLar.HtmlToPdf.Services
             if (ttfResources.Length == 0)
                 return 0;
 
-            var tempDir = Path.Combine(Path.GetTempPath(), "AnLar.HtmlToPdf.Fonts");
+            var tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "AnLar.HtmlToPdf.Fonts");
             Directory.CreateDirectory(tempDir);
 
             int count = 0;
             foreach (var resourceName in ttfResources)
             {
-                var targetPath = Path.Combine(tempDir, resourceName);
+                var targetPath = System.IO.Path.Combine(tempDir, resourceName);
                 if (!File.Exists(targetPath))
                 {
                     using var stream = assembly.GetManifestResourceStream(resourceName);

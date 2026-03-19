@@ -11,7 +11,7 @@ namespace AnLar.HtmlToPdf.Tests
 
         public FooterTests()
         {
-            var logger = NullLoggerFactory.Instance.CreateLogger<AccessiblePdfGenerator>();
+            var logger = new NullLogger<AccessiblePdfGenerator>();
             _generator = new AccessiblePdfGenerator(logger);
         }
 
