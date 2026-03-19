@@ -1,3 +1,4 @@
+using AnLar.HtmlToPdf.DTOs;
 using iText.Html2pdf;
 using iText.Html2pdf.Attach;
 using iText.Html2pdf.Attach.Impl;
@@ -14,6 +15,8 @@ using iText.Layout;
 using iText.Layout.Font;
 using iText.StyledXmlParser.Node;
 using Microsoft.Extensions.Logging;
+using PDFtoImage;
+using SkiaSharp;
 using System;
 using System.IO;
 using System.Reflection;
@@ -99,6 +102,41 @@ namespace AnLar.HtmlToPdf.Services
             }
 
             return outputStream.ToArray();
+        }
+
+        public PdfImagesResponse GeneratePdfPageImages(
+            string htmlContent,
+            string documentTitle,
+            string documentLanguage = "en-US",
+            string pageOrientation = "portrait",
+            float marginTop = 10f,
+            float marginRight = 10f,
+            float marginBottom = 10f,
+            float marginLeft = 10f,
+            bool showPageNumbers = false,
+            string? watermark = null,
+            int dpi = 300)
+        {
+            var pdfBytes = GenerateAccessiblePdfFromHtml(
+                htmlContent, documentTitle, documentLanguage, pageOrientation,
+                marginTop, marginRight, marginBottom, marginLeft,
+                showPageNumbers, watermark);
+
+            var renderOptions = new RenderOptions { Dpi = dpi };
+            var response = new PdfImagesResponse();
+
+            using var pdfStream = new MemoryStream(pdfBytes);
+            foreach (var bitmap in Conversion.ToImages(pdfStream, options: renderOptions))
+            {
+                using (bitmap)
+                using (var encoded = bitmap.Encode(SKEncodedImageFormat.Png, 100))
+                {
+                    response.Pages.Add(Convert.ToBase64String(encoded.ToArray()));
+                }
+            }
+
+            response.PageCount = response.Pages.Count;
+            return response;
         }
 
         private static void AddPageNumbers(PdfDocument pdfDocument)
