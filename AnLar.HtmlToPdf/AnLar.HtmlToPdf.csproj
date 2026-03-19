@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="itext.bouncy-castle-adapter" Version="9.5.0" />
     <PackageReference Include="itext.pdfhtml" Version="6.3.1" />
+    <PackageReference Include="PDFtoImage" Version="5.2.0" />
   </ItemGroup>
 
   <ItemGroup>

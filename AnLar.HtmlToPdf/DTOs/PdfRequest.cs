@@ -48,5 +48,9 @@ namespace AnLar.HtmlToPdf.DTOs
         /// The footer is marked as a PDF artifact so screen readers skip it.
         /// </summary>
         public string? FooterContent { get; set; }
+        /// Resolution in dots per inch for the /pdf/images endpoint. Defaults to 300.
+        /// Higher values produce larger, sharper images.
+        /// </summary>
+        public int? Dpi { get; set; }
     }
 }
