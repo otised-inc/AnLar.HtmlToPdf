@@ -11,6 +11,7 @@ using iText.Kernel.Pdf.Canvas;
 using iText.Kernel.Pdf.Extgstate;
 using iText.Kernel.Pdf.Tagging;
 using iText.Kernel.XMP;
+using iText.Kernel.Geom;
 using iText.Layout;
 using iText.Layout.Font;
 using iText.StyledXmlParser.Node;
@@ -43,7 +44,8 @@ namespace AnLar.HtmlToPdf.Services
             float marginBottom = 10f,
             float marginLeft = 10f,
             bool showPageNumbers = false,
-            string? watermark = null)
+            string? watermark = null,
+            string? footerContent = null)
         {
             using var memoryStream = new MemoryStream();
 
@@ -63,7 +65,6 @@ namespace AnLar.HtmlToPdf.Services
 
                 SetPdfUaXmpMetadata(pdfDocument, documentTitle);
 
-                var converterProperties = new ConverterProperties();
                 var fontProvider = new FontProvider();
                 AddBundledFonts(fontProvider);
                 foreach (var dir in GetSystemFontDirectories())
@@ -71,9 +72,16 @@ namespace AnLar.HtmlToPdf.Services
                     _logger.LogInformation("Adding system font directory: {Dir}", dir);
                     fontProvider.AddDirectory(dir);
                 }
+
+                var converterProperties = new ConverterProperties();
                 converterProperties.SetFontProvider(fontProvider);
                 converterProperties.SetTagWorkerFactory(new AccessibleTagWorkerFactory());
                 converterProperties.SetOutlineHandler(OutlineHandler.CreateStandardHandler());
+
+                // Ensure bottom margin has room for footer content
+                bool hasFooter = !string.IsNullOrWhiteSpace(footerContent);
+                if (hasFooter && marginBottom < 20f)
+                    marginBottom = 20f;
 
                 var wrappedHtml = WrapInHtmlDocument(htmlContent, documentTitle, documentLanguage, pageOrientation, marginTop, marginRight, marginBottom, marginLeft);
 
@@ -81,12 +89,26 @@ namespace AnLar.HtmlToPdf.Services
                 // HtmlConverter closes the PdfDocument after conversion
             }
 
-            bool needsStamping = showPageNumbers || !string.IsNullOrWhiteSpace(watermark);
+            bool needsStamping = showPageNumbers || !string.IsNullOrWhiteSpace(watermark) || !string.IsNullOrWhiteSpace(footerContent);
 
             if (!needsStamping)
                 return memoryStream.ToArray();
 
-            // Second pass: stamp page numbers and/or watermark onto the already-generated PDF.
+            // Build a separate ConverterProperties for the footer HTML (reuses the same font provider).
+            // This must be created outside the stamping block since the main converterProperties
+            // was scoped to the first pass.
+            ConverterProperties? footerConverterProperties = null;
+            if (!string.IsNullOrWhiteSpace(footerContent))
+            {
+                var footerFontProvider = new FontProvider();
+                AddBundledFonts(footerFontProvider);
+                foreach (var dir in GetSystemFontDirectories())
+                    footerFontProvider.AddDirectory(dir);
+                footerConverterProperties = new ConverterProperties();
+                footerConverterProperties.SetFontProvider(footerFontProvider);
+            }
+
+            // Second pass: stamp page numbers, watermark, and/or footer onto the already-generated PDF.
             // A new PdfDocument in stamper mode (reader+writer) must be used because
             // HtmlConverter closes the original document before we can query page count.
             using var inputStream = new MemoryStream(memoryStream.ToArray());
@@ -97,6 +119,8 @@ namespace AnLar.HtmlToPdf.Services
             {
                 if (!string.IsNullOrWhiteSpace(watermark))
                     AddWatermark(stampDoc, watermark!);
+                if (!string.IsNullOrWhiteSpace(footerContent))
+                    AddFooter(stampDoc, footerContent!, footerConverterProperties!);
                 if (showPageNumbers)
                     AddPageNumbers(stampDoc);
             }
@@ -163,6 +187,47 @@ namespace AnLar.HtmlToPdf.Services
                       .EndText();
                 canvas.EndMarkedContent();
                 canvas.Release();
+            }
+        }
+
+        private static void AddFooter(PdfDocument pdfDocument, string footerHtml, ConverterProperties converterProperties)
+        {
+            int totalPages = pdfDocument.GetNumberOfPages();
+            var elements = HtmlConverter.ConvertToElements(footerHtml, converterProperties);
+
+            for (int i = 1; i <= totalPages; i++)
+            {
+                var page = pdfDocument.GetPage(i);
+                var pageSize = page.GetPageSize();
+
+                // Footer rectangle: full width with 36pt (0.5in) horizontal margins,
+                // positioned at the bottom of the page in the margin area.
+                const float horizontalMargin = 36f;
+                const float footerHeight = 50f;
+                const float footerBottom = 10f;
+                var footerRect = new Rectangle(
+                    pageSize.GetLeft() + horizontalMargin,
+                    pageSize.GetBottom() + footerBottom,
+                    pageSize.GetWidth() - 2 * horizontalMargin,
+                    footerHeight);
+
+                var pdfCanvas = new PdfCanvas(page);
+                // Mark as artifact so screen readers and PDF/UA validators ignore it
+                pdfCanvas.BeginMarkedContent(PdfName.Artifact);
+
+                using (var layoutCanvas = new Canvas(pdfCanvas, footerRect))
+                {
+                    foreach (var element in elements)
+                    {
+                        if (element is iText.Layout.Element.IBlockElement blockElement)
+                            layoutCanvas.Add(blockElement);
+                        else if (element is iText.Layout.Element.Image image)
+                            layoutCanvas.Add(image);
+                    }
+                }
+
+                pdfCanvas.EndMarkedContent();
+                pdfCanvas.Release();
             }
         }
 
