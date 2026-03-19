@@ -41,5 +41,11 @@ namespace AnLar.HtmlToPdf.DTOs
         /// When null or empty, no watermark is added.
         /// </summary>
         public string? Watermark { get; set; }
+
+        /// <summary>
+        /// Resolution in dots per inch for the /pdf/images endpoint. Defaults to 300.
+        /// Higher values produce larger, sharper images.
+        /// </summary>
+        public int? Dpi { get; set; }
     }
 }
