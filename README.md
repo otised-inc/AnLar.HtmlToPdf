@@ -14,7 +14,9 @@ An ASP.NET Core Web API that converts HTML content into accessible PDF documents
 - **Page Layout Control** — Configurable page orientation (portrait/landscape) and per-side margins in millimeters
 - **Optional Page Numbers** — Adds centered "Page X of Y" footers, marked as PDF artifacts to preserve accessibility compliance
 - **Watermark Support** — Optional diagonal watermark text (e.g. "DRAFT", "CONFIDENTIAL") rendered in light gray with 30% opacity, marked as a PDF artifact so it doesn't interfere with screen readers
+- **Custom HTML Footers** — Render arbitrary HTML/CSS as a footer on every page, marked as a PDF artifact to preserve accessibility compliance
 - **Inline Image Support** — Handles base64-encoded and URL-referenced images with full 508/PDF-UA compliance: images with `alt` text are tagged as Figure elements, empty `alt=""` marks images as decorative (excluded from structure tree), and missing `alt` attributes receive a fallback description
+- **PDF-to-Image Export** — Convert generated PDFs to high-quality PNG images at configurable DPI via the `/pdf/images` endpoint
 
 ## Prerequisites
 
@@ -55,7 +57,8 @@ Converts HTML content to an accessible PDF.
   "marginBottom": 10,
   "marginLeft": 10,
   "showPageNumbers": false,
-  "watermark": "DRAFT"
+  "watermark": "DRAFT",
+  "footerContent": "<p style='text-align:center; font-size:8pt;'>Company Confidential</p>"
 }
 ```
 
@@ -71,6 +74,7 @@ Converts HTML content to an accessible PDF.
 | `marginLeft`       | float   | No       | `10`           | Left margin in millimeters                                |
 | `showPageNumbers`  | boolean | No       | `false`        | When `true`, adds "Page X of Y" centered at the bottom of each page |
 | `watermark`        | string  | No       | `null`         | Diagonal watermark text rendered on every page (e.g. `"DRAFT"`, `"CONFIDENTIAL"`) |
+| `footerContent`    | string  | No       | `null`         | HTML content rendered as a footer on every page (marked as artifact for accessibility) |
 
 **Response:** `application/pdf` binary stream.
 
@@ -81,6 +85,37 @@ curl -X POST https://localhost:50670/pdf \
   -H "Content-Type: application/json" \
   -d '{"htmlContent":"<h1>Report</h1><p>Content here.</p>","documentTitle":"Report","documentLanguage":"en-US","showPageNumbers":true,"watermark":"DRAFT"}' \
   -o output.pdf
+```
+
+### `POST /pdf/images`
+
+Renders each page of the generated PDF as a PNG image. Useful for previews and thumbnails.
+
+**Request Body (JSON):** Same as `POST /pdf`, with one additional field:
+
+| Field | Type | Required | Default | Description                          |
+|-------|------|----------|---------|--------------------------------------|
+| `dpi` | int  | No       | `300`   | Resolution (dots per inch) for the rendered images |
+
+**Response (JSON):**
+
+```json
+{
+  "pageCount": 2,
+  "pages": [
+    "<base64-encoded PNG of page 1>",
+    "<base64-encoded PNG of page 2>"
+  ]
+}
+```
+
+**Example (curl):**
+
+```bash
+curl -X POST https://localhost:50670/pdf/images \
+  -H "Content-Type: application/json" \
+  -d '{"htmlContent":"<h1>Report</h1><p>Content here.</p>","documentTitle":"Report","dpi":150}' \
+  -o response.json
 ```
 
 ## Project Structure
@@ -98,7 +133,8 @@ AnLar.HtmlToPdf/
     ├── Services/
     │   └── AccessiblePdfGenerator.cs     # Core PDF generation & accessibility logic
     ├── DTOs/
-    │   └── PdfRequest.cs                 # Request model
+    │   ├── PdfRequest.cs                 # Request model
+    │   └── PdfImagesResponse.cs          # Response model for /pdf/images
     ├── Properties/
     │   └── launchSettings.json
     └── Fonts/
@@ -108,7 +144,9 @@ AnLar.HtmlToPdf/
         ├── LiberationSerif-BoldItalic.ttf
         └── LICENSE-LiberationFonts.txt
 AnLar.HtmlToPdf.Tests/
-    └── InlineImageTests.cs            # Unit tests for inline image handling
+    ├── InlineImageTests.cs            # Unit tests for inline image handling
+    ├── FooterTests.cs                 # Unit tests for HTML footer rendering
+    └── PdfToImageTests.cs             # Unit tests for PDF-to-image export
 ```
 
 ## Build & Publish
@@ -130,6 +168,7 @@ dotnet publish -c Release -r linux-x64
 |----------------------------------|---------|-------------------------------------------|
 | `itext.pdfhtml`                  | 6.3.1   | HTML-to-PDF conversion with iText         |
 | `itext.bouncy-castle-adapter`    | 9.5.0   | Cryptography adapter required by iText    |
+| `PDFtoImage`                     | 5.2.0   | PDF page rendering for `/pdf/images` endpoint |
 
 Fonts are [Liberation Serif](https://github.com/liberationfonts/liberation-fonts) licensed under the SIL Open Font License.
 
@@ -147,7 +186,8 @@ BODY (raw):
   "marginBottom": 10,
   "marginLeft": 10,
   "showPageNumbers": true,
-  "watermark": "DRAFT"
+  "watermark": "DRAFT",
+  "footerContent": "<p style='text-align:center; font-size:8pt;'>Company Confidential</p>"
 }
 ```
 
