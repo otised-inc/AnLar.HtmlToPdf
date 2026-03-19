@@ -14,7 +14,7 @@ An ASP.NET Core Web API that converts HTML content into accessible PDF documents
 - **Page Layout Control** — Configurable page orientation (portrait/landscape) and per-side margins in millimeters
 - **Optional Page Numbers** — Adds centered "Page X of Y" footers, marked as PDF artifacts to preserve accessibility compliance
 - **Watermark Support** — Optional diagonal watermark text (e.g. "DRAFT", "CONFIDENTIAL") rendered in light gray with 30% opacity, marked as a PDF artifact so it doesn't interfere with screen readers
-- **Custom HTML Footers** — Render arbitrary HTML/CSS as a footer on every page, marked as a PDF artifact to preserve accessibility compliance
+- **Custom HTML Footers** — Render arbitrary HTML/CSS as a footer on every page, with `{pageNumber}` and `{totalPages}` placeholder support for dynamic page numbering; marked as a PDF artifact to preserve accessibility compliance
 - **Inline Image Support** — Handles base64-encoded and URL-referenced images with full 508/PDF-UA compliance: images with `alt` text are tagged as Figure elements, empty `alt=""` marks images as decorative (excluded from structure tree), and missing `alt` attributes receive a fallback description
 - **PDF-to-Image Export** — Convert generated PDFs to high-quality PNG images at configurable DPI via the `/pdf/images` endpoint
 
@@ -58,7 +58,7 @@ Converts HTML content to an accessible PDF.
   "marginLeft": 10,
   "showPageNumbers": false,
   "watermark": "DRAFT",
-  "footerContent": "<p style='text-align:center; font-size:8pt;'>Company Confidential</p>"
+  "footerContent": "<p style='text-align:center; font-size:8pt;'>Page {pageNumber} of {totalPages}</p>"
 }
 ```
 
@@ -74,7 +74,7 @@ Converts HTML content to an accessible PDF.
 | `marginLeft`       | float   | No       | `10`           | Left margin in millimeters                                |
 | `showPageNumbers`  | boolean | No       | `false`        | When `true`, adds "Page X of Y" centered at the bottom of each page |
 | `watermark`        | string  | No       | `null`         | Diagonal watermark text rendered on every page (e.g. `"DRAFT"`, `"CONFIDENTIAL"`) |
-| `footerContent`    | string  | No       | `null`         | HTML content rendered as a footer on every page (marked as artifact for accessibility) |
+| `footerContent`    | string  | No       | `null`         | HTML content rendered as a footer on every page (marked as artifact for accessibility). Supports `{pageNumber}` and `{totalPages}` placeholders for dynamic page numbering |
 
 **Response:** `application/pdf` binary stream.
 
