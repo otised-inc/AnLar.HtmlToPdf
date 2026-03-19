@@ -41,5 +41,12 @@ namespace AnLar.HtmlToPdf.DTOs
         /// When null or empty, no watermark is added.
         /// </summary>
         public string? Watermark { get; set; }
+
+        /// <summary>
+        /// HTML content to render as a footer on every page.
+        /// When null or empty, no footer is rendered. Supports any valid HTML/CSS.
+        /// The footer is marked as a PDF artifact so screen readers skip it.
+        /// </summary>
+        public string? FooterContent { get; set; }
     }
 }
