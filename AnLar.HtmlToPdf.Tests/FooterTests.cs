@@ -102,6 +102,26 @@ namespace AnLar.HtmlToPdf.Tests
         }
 
         [Fact]
+        public void GeneratePdf_WithFooterPageNumberPlaceholders_ProducesValidPdf()
+        {
+            var html = "<h1>Page Number Footer</h1><p>Body content.</p>";
+
+            var pdfBytes = _generator.GenerateAccessiblePdfFromHtml(
+                html, "Page Number Footer Test",
+                footerContent: "<p style='text-align:center; font-size:8pt;'>Page {pageNumber} of {totalPages}</p>");
+
+            Assert.NotNull(pdfBytes);
+            Assert.True(pdfBytes.Length > 0);
+
+            using var ms = new MemoryStream(pdfBytes);
+            using var reader = new PdfReader(ms);
+            using var pdfDoc = new PdfDocument(reader);
+
+            Assert.True(pdfDoc.IsTagged());
+            Assert.True(pdfDoc.GetNumberOfPages() >= 1);
+        }
+
+        [Fact]
         public void GeneratePdf_WithNoFooterContent_MatchesOriginalBehavior()
         {
             var html = "<h1>No Footer</h1><p>Body content.</p>";

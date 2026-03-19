@@ -193,7 +193,10 @@ namespace AnLar.HtmlToPdf.Services
         private static void AddFooter(PdfDocument pdfDocument, string footerHtml, ConverterProperties converterProperties)
         {
             int totalPages = pdfDocument.GetNumberOfPages();
-            var elements = HtmlConverter.ConvertToElements(footerHtml, converterProperties);
+            bool hasPlaceholders = footerHtml.Contains("{pageNumber}") || footerHtml.Contains("{totalPages}");
+
+            // If no placeholders, convert once and reuse for all pages
+            var sharedElements = hasPlaceholders ? null : HtmlConverter.ConvertToElements(footerHtml, converterProperties);
 
             for (int i = 1; i <= totalPages; i++)
             {
@@ -210,6 +213,13 @@ namespace AnLar.HtmlToPdf.Services
                     pageSize.GetBottom() + footerBottom,
                     pageSize.GetWidth() - 2 * horizontalMargin,
                     footerHeight);
+
+                // Replace placeholders per-page if present
+                var elements = sharedElements ?? HtmlConverter.ConvertToElements(
+                    footerHtml
+                        .Replace("{pageNumber}", i.ToString())
+                        .Replace("{totalPages}", totalPages.ToString()),
+                    converterProperties);
 
                 var pdfCanvas = new PdfCanvas(page);
                 // Mark as artifact so screen readers and PDF/UA validators ignore it
