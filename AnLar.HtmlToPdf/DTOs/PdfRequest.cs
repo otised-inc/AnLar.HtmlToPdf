@@ -45,6 +45,7 @@ namespace AnLar.HtmlToPdf.DTOs
         /// <summary>
         /// HTML content to render as a footer on every page.
         /// When null or empty, no footer is rendered. Supports any valid HTML/CSS.
+        /// Use {pageNumber} and {totalPages} placeholders for dynamic page numbering.
         /// The footer is marked as a PDF artifact so screen readers skip it.
         /// </summary>
         public string? FooterContent { get; set; }
