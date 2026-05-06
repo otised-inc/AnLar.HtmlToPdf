@@ -21,7 +21,11 @@ using SkiaSharp;
 using System;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 
 namespace AnLar.HtmlToPdf.Services
 {
@@ -226,20 +230,152 @@ namespace AnLar.HtmlToPdf.Services
                 showPageNumbers, watermark);
 
             var renderOptions = new RenderOptions { Dpi = dpi };
-            var response = new PdfImagesResponse();
 
-            using var pdfStream = new MemoryStream(pdfBytes);
-            foreach (var bitmap in Conversion.ToImages(pdfStream, options: renderOptions))
+            int pageCount = Conversion.GetPageCount(pdfBytes);
+            var encodedPages = new string[pageCount];
+
+            // Bound the number of bitmaps in flight at once. A single decoded letter
+            // page at 300 DPI is ~33MB; a long job (e.g. 2000 pages on a 7GB Azure
+            // App Service) would OOM if we queued every encode task immediately.
+            // Cap concurrency to a small multiple of cores — encoding is CPU-bound,
+            // so going wider than this doesn't help and only inflates memory.
+            int concurrency = Math.Max(2, Math.Min(Environment.ProcessorCount, 4));
+            using var encodeSlot = new SemaphoreSlim(concurrency, concurrency);
+
+            // PDFium is single-threaded (PDFtoImage takes an internal lock around
+            // each call), so we render serially. PNG encoding, however, is CPU-heavy
+            // and thread-safe per bitmap — offload it to background tasks so it
+            // overlaps the next page's render. The semaphore makes the render loop
+            // block (and stop pulling the next bitmap from PDFium) once `concurrency`
+            // bitmaps are in flight, capping peak memory.
+            var encodeTasks = new List<Task>(pageCount);
+            int pageIndex = 0;
+            foreach (var bitmap in Conversion.ToImages(pdfBytes, options: renderOptions))
             {
-                using (bitmap)
-                using (var encoded = bitmap.Encode(SKEncodedImageFormat.Png, 100))
+                encodeSlot.Wait();
+                int idx = pageIndex++;
+                var bmp = bitmap; // capture per-iteration
+                encodeTasks.Add(Task.Run(() =>
                 {
-                    response.Pages.Add(Convert.ToBase64String(encoded.ToArray()));
-                }
+                    try
+                    {
+                        using (bmp)
+                        using (var encoded = bmp.Encode(SKEncodedImageFormat.Png, 100))
+                        {
+                            // SKData.AsSpan exposes the native PNG buffer with no managed
+                            // copy — saves one byte[] allocation per page.
+                            encodedPages[idx] = Convert.ToBase64String(encoded.AsSpan());
+                        }
+                    }
+                    finally { encodeSlot.Release(); }
+                }));
             }
 
-            response.PageCount = response.Pages.Count;
-            return response;
+            Task.WaitAll(encodeTasks.ToArray());
+
+            return new PdfImagesResponse
+            {
+                PageCount = pageCount,
+                Pages = [.. encodedPages]
+            };
+        }
+
+        /// <summary>
+        /// Streams one PNG per page as it finishes encoding. Memory peaks at roughly
+        /// (concurrency × bitmap size) + (channel-buffered base64 strings), regardless
+        /// of total page count — so a 2000-page job runs in the same footprint as an
+        /// 8-page one. Caller is responsible for writing each <see cref="PageImage"/>
+        /// to the wire (e.g. NDJSON) before the next one buffers up.
+        /// </summary>
+        public async IAsyncEnumerable<PageImage> GeneratePdfPageImagesStreamAsync(
+            string htmlContent,
+            string documentTitle,
+            string documentLanguage = "en-US",
+            string pageOrientation = "portrait",
+            float marginTop = 10f,
+            float marginRight = 10f,
+            float marginBottom = 10f,
+            float marginLeft = 10f,
+            bool showPageNumbers = false,
+            string? watermark = null,
+            int dpi = 300,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var pdfBytes = GenerateAccessiblePdfFromHtml(
+                htmlContent, documentTitle, documentLanguage, pageOrientation,
+                marginTop, marginRight, marginBottom, marginLeft,
+                showPageNumbers, watermark);
+
+            var renderOptions = new RenderOptions { Dpi = dpi };
+            int pageCount = Conversion.GetPageCount(pdfBytes);
+
+            int concurrency = Math.Max(2, Math.Min(Environment.ProcessorCount, 4));
+            var encodeSlot = new SemaphoreSlim(concurrency, concurrency);
+
+            // Bounded channel applies back-pressure: if the HTTP consumer is slow,
+            // encoders block on WriteAsync, which lets the semaphore stay full and
+            // halts the renderer. Capacity is small (= concurrency) on purpose so
+            // base64 strings don't pile up.
+            var channel = Channel.CreateBounded<PageImage>(new BoundedChannelOptions(concurrency)
+            {
+                SingleReader = true,
+                SingleWriter = false,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
+
+            var producer = Task.Run(async () =>
+            {
+                Exception? error = null;
+                var encodeTasks = new List<Task>(Math.Min(pageCount, 64));
+                try
+                {
+                    int idx = 0;
+                    foreach (var bitmap in Conversion.ToImages(pdfBytes, options: renderOptions))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        await encodeSlot.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+                        int page = idx++;
+                        var bmp = bitmap; // capture per-iteration
+                        encodeTasks.Add(Task.Run(async () =>
+                        {
+                            try
+                            {
+                                using (bmp)
+                                using (var encoded = bmp.Encode(SKEncodedImageFormat.Png, 100))
+                                {
+                                    var b64 = Convert.ToBase64String(encoded.AsSpan());
+                                    await channel.Writer.WriteAsync(
+                                        new PageImage(page, pageCount, b64),
+                                        cancellationToken).ConfigureAwait(false);
+                                }
+                            }
+                            finally { encodeSlot.Release(); }
+                        }, cancellationToken));
+                    }
+                    await Task.WhenAll(encodeTasks).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+                channel.Writer.TryComplete(error);
+            }, cancellationToken);
+
+            try
+            {
+                await foreach (var img in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+                    yield return img;
+            }
+            finally
+            {
+                // Drain the producer before disposing the semaphore. Swallow the
+                // cancellation/disconnect path — those are normal client behavior.
+                try { await producer.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Streaming page-image producer faulted"); }
+                encodeSlot.Dispose();
+            }
         }
 
         private static void AddPageNumbers(PdfDocument pdfDocument)

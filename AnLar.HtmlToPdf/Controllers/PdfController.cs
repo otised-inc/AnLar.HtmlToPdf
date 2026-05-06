@@ -1,6 +1,7 @@
 using AnLar.HtmlToPdf.DTOs;
 using AnLar.HtmlToPdf.Services;
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
 
 namespace AnLar.HtmlToPdf.Controllers
 {
@@ -64,6 +65,59 @@ namespace AnLar.HtmlToPdf.Controllers
                 request.Dpi ?? 300), cancellationToken);
 
             return Ok(response);
+        }
+
+        /// <summary>
+        /// Streaming variant of /pdf/images for large jobs. Emits NDJSON
+        /// (one PageImage JSON object per line) and flushes after every page,
+        /// so server memory stays bounded regardless of total page count.
+        /// </summary>
+        [HttpPost("/pdf/images/stream")]
+        public async Task GeneratePdfImagesStream([FromBody] PdfRequest request, CancellationToken cancellationToken)
+        {
+            var validationError = ValidateRequest(request);
+            if (validationError != null)
+            {
+                Response.StatusCode = StatusCodes.Status400BadRequest;
+                await Response.WriteAsJsonAsync(new { error = validationError.Value }, cancellationToken);
+                return;
+            }
+
+            var orientation = request.PageOrientation?.ToLowerInvariant() ?? "portrait";
+
+            Response.StatusCode = StatusCodes.Status200OK;
+            Response.ContentType = "application/x-ndjson";
+            // Disable response buffering so per-page flushes actually leave the box.
+            Response.Headers.CacheControl = "no-cache";
+            var bufferingFeature = HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>();
+            bufferingFeature?.DisableBuffering();
+
+            var jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            };
+            var newline = new byte[] { (byte)'\n' };
+
+            var pages = _pdfGenerator.GeneratePdfPageImagesStreamAsync(
+                request.HtmlContent,
+                request.DocumentTitle ?? "Untitled",
+                request.DocumentLanguage ?? "en-US",
+                orientation,
+                request.MarginTop ?? 10f,
+                request.MarginRight ?? 10f,
+                request.MarginBottom ?? 10f,
+                request.MarginLeft ?? 10f,
+                request.ShowPageNumbers ?? false,
+                request.Watermark,
+                request.Dpi ?? 300,
+                cancellationToken);
+
+            await foreach (var page in pages.ConfigureAwait(false))
+            {
+                await JsonSerializer.SerializeAsync(Response.Body, page, jsonOptions, cancellationToken);
+                await Response.Body.WriteAsync(newline, cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+            }
         }
 
         private BadRequestObjectResult? ValidateRequest(PdfRequest request)
