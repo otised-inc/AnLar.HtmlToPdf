@@ -1,15 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="itext.bouncy-castle-adapter" Version="9.5.0" />
-    <PackageReference Include="itext.pdfhtml" Version="6.3.1" />
-    <PackageReference Include="PDFtoImage" Version="5.2.0" />
+    <PackageReference Include="itext.bouncy-castle-adapter" Version="9.6.0" />
+    <PackageReference Include="itext.pdfhtml" Version="6.3.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="PDFtoImage" Version="5.2.1" />
   </ItemGroup>
 
   <ItemGroup>
