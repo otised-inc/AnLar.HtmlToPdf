@@ -20,7 +20,7 @@ An ASP.NET Core Web API that converts HTML content into accessible PDF documents
 
 ## Prerequisites
 
-- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) or later
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later
 
 ## Getting Started
 
@@ -118,6 +118,36 @@ curl -X POST https://localhost:50670/pdf/images \
   -o response.json
 ```
 
+> **Use `/pdf/images/stream` (below) for large jobs.** This endpoint buffers every page's base64 PNG in memory and serializes them all in one JSON response — for jobs over a few hundred pages on a memory-constrained host (e.g. Azure App Service), prefer the streaming variant.
+
+### `POST /pdf/images/stream`
+
+Streaming variant of `/pdf/images` for large or memory-sensitive jobs. Emits NDJSON (one JSON object per line) and flushes after every page, so server memory stays bounded regardless of total page count.
+
+**Request Body (JSON):** Same as `POST /pdf/images`.
+
+**Response:** `application/x-ndjson` — one `PageImage` JSON object per line, in the order pages finish encoding (which may differ from page order under parallel encoding; use the `page` field to reassemble).
+
+```
+{"page":0,"totalPages":3,"base64":"<png-1>"}
+{"page":1,"totalPages":3,"base64":"<png-2>"}
+{"page":2,"totalPages":3,"base64":"<png-3>"}
+```
+
+| Field        | Type   | Description                                  |
+|--------------|--------|----------------------------------------------|
+| `page`       | int    | Zero-based page index                        |
+| `totalPages` | int    | Total page count (same on every line)        |
+| `base64`     | string | Base64-encoded PNG for the page              |
+
+**Example (curl, prints lines as they arrive):**
+
+```bash
+curl -N -X POST https://localhost:50670/pdf/images/stream \
+  -H "Content-Type: application/json" \
+  -d '{"htmlContent":"<h1>Report</h1>","documentTitle":"Report","dpi":150}'
+```
+
 ## Project Structure
 
 ```
@@ -134,7 +164,8 @@ AnLar.HtmlToPdf/
     │   └── AccessiblePdfGenerator.cs     # Core PDF generation & accessibility logic
     ├── DTOs/
     │   ├── PdfRequest.cs                 # Request model
-    │   └── PdfImagesResponse.cs          # Response model for /pdf/images
+    │   ├── PdfImagesResponse.cs          # Response model for /pdf/images
+    │   └── PageImage.cs                  # NDJSON line model for /pdf/images/stream
     ├── Properties/
     │   └── launchSettings.json
     └── Fonts/
@@ -166,9 +197,10 @@ dotnet publish -c Release -r linux-x64
 
 | Package                          | Version | Purpose                                   |
 |----------------------------------|---------|-------------------------------------------|
-| `itext.pdfhtml`                  | 6.3.1   | HTML-to-PDF conversion with iText         |
-| `itext.bouncy-castle-adapter`    | 9.5.0   | Cryptography adapter required by iText    |
-| `PDFtoImage`                     | 5.2.0   | PDF page rendering for `/pdf/images` endpoint |
+| `itext.pdfhtml`                  | 6.3.2   | HTML-to-PDF conversion with iText         |
+| `itext.bouncy-castle-adapter`    | 9.6.0   | Cryptography adapter required by iText    |
+| `PDFtoImage`                     | 5.2.1   | PDF page rendering for `/pdf/images` endpoint |
+| `Newtonsoft.Json`                | 13.0.4  | Pinned to override a vulnerable transitive pulled in by iText |
 
 Fonts are [Liberation Serif](https://github.com/liberationfonts/liberation-fonts) licensed under the SIL Open Font License.
 
