@@ -29,9 +29,97 @@ namespace AnLar.HtmlToPdf.Services
     {
         private readonly ILogger<AccessiblePdfGenerator> _logger;
 
+        // Cache only the *list* of font file paths (one-time directory enumeration).
+        // We deliberately do NOT cache the FontProvider itself — HtmlConverter
+        // registers @font-face fonts into the FontProvider as a side effect, and a
+        // shared instance accumulates that state across requests, which slows
+        // subsequent renders and risks cross-request leakage.
+        private static IReadOnlyList<string>? _cachedFontFilePaths;
+        private static readonly object _fontPathsLock = new();
+
+        // Tag worker factory has no per-request state — share it.
+        private static readonly AccessibleTagWorkerFactory _tagWorkerFactory = new();
+
         public AccessiblePdfGenerator(ILogger<AccessiblePdfGenerator> logger)
         {
             _logger = logger;
+        }
+
+        private IReadOnlyList<string> GetCachedFontFilePaths()
+        {
+            if (_cachedFontFilePaths != null)
+                return _cachedFontFilePaths;
+
+            lock (_fontPathsLock)
+            {
+                if (_cachedFontFilePaths != null)
+                    return _cachedFontFilePaths;
+
+                var paths = new List<string>();
+
+                // Bundled font dir: try known deployment locations and embedded resources.
+                var bundledDir = ResolveBundledFontDirectory();
+                if (bundledDir != null)
+                {
+                    paths.AddRange(EnumerateFontFiles(bundledDir));
+                    _logger.LogInformation("Cached {Count} bundled fonts from {Dir}", paths.Count, bundledDir);
+                }
+                else
+                {
+                    // Fall back to embedded resources (extracted to temp once).
+                    var extracted = ExtractEmbeddedFontFiles();
+                    paths.AddRange(extracted);
+                    _logger.LogInformation("Cached {Count} embedded fonts (extracted to temp)", extracted.Length);
+                }
+
+                int bundledCount = paths.Count;
+
+                // System font directories — the slow part on Windows (hundreds of files).
+                foreach (var dir in GetSystemFontDirectories())
+                {
+                    var fontFiles = EnumerateFontFiles(dir);
+                    paths.AddRange(fontFiles);
+                    _logger.LogInformation("Cached {Count} fonts from system dir {Dir}", fontFiles.Count, dir);
+                }
+
+                _logger.LogInformation("Font path cache: {Total} files ({Bundled} bundled, {System} system)",
+                    paths.Count, bundledCount, paths.Count - bundledCount);
+
+                _cachedFontFilePaths = paths;
+                return _cachedFontFilePaths;
+            }
+        }
+
+        private FontProvider BuildFontProvider()
+        {
+            var fp = new FontProvider();
+            foreach (var path in GetCachedFontFilePaths())
+            {
+                try { fp.AddFont(path); }
+                catch { /* skip unreadable/corrupt fonts silently — same as AddDirectory's behavior */ }
+            }
+            return fp;
+        }
+
+        /// <summary>
+        /// Pre-warms iText static initialization (CSS parser, default styles, font
+        /// scanning) so the first real request doesn't pay that cost.
+        /// </summary>
+        public void Warmup()
+        {
+            try
+            {
+                _ = GetCachedFontFilePaths();
+                using var ms = new MemoryStream();
+                var props = new ConverterProperties();
+                props.SetFontProvider(BuildFontProvider());
+                HtmlConverter.ConvertToPdf("<p>warmup</p>", ms, props);
+                _logger.LogInformation("PDF generator warm-up complete");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "PDF generator warm-up failed (non-fatal)");
+            }
         }
 
         public byte[] GenerateAccessiblePdfFromHtml(
@@ -65,17 +153,11 @@ namespace AnLar.HtmlToPdf.Services
 
                 SetPdfUaXmpMetadata(pdfDocument, documentTitle);
 
-                var fontProvider = new FontProvider();
-                AddBundledFonts(fontProvider);
-                foreach (var dir in GetSystemFontDirectories())
-                {
-                    _logger.LogInformation("Adding system font directory: {Dir}", dir);
-                    fontProvider.AddDirectory(dir);
-                }
+                var fontProvider = BuildFontProvider();
 
                 var converterProperties = new ConverterProperties();
                 converterProperties.SetFontProvider(fontProvider);
-                converterProperties.SetTagWorkerFactory(new AccessibleTagWorkerFactory());
+                converterProperties.SetTagWorkerFactory(_tagWorkerFactory);
                 converterProperties.SetOutlineHandler(OutlineHandler.CreateStandardHandler());
 
                 // Ensure bottom margin has room for footer content
@@ -91,28 +173,25 @@ namespace AnLar.HtmlToPdf.Services
 
             bool needsStamping = showPageNumbers || !string.IsNullOrWhiteSpace(watermark) || !string.IsNullOrWhiteSpace(footerContent);
 
-            if (!needsStamping)
-                return memoryStream.ToArray();
+            // HtmlConverter closes the underlying stream, but MemoryStream.ToArray()
+            // still works after close. Capture the first-pass bytes once and reuse.
+            var firstPassBytes = memoryStream.ToArray();
 
-            // Build a separate ConverterProperties for the footer HTML (reuses the same font provider).
-            // This must be created outside the stamping block since the main converterProperties
-            // was scoped to the first pass.
+            if (!needsStamping)
+                return firstPassBytes;
+
+            // Build a fresh FontProvider for the footer pass (fast — paths are cached).
             ConverterProperties? footerConverterProperties = null;
             if (!string.IsNullOrWhiteSpace(footerContent))
             {
-                var footerFontProvider = new FontProvider();
-                AddBundledFonts(footerFontProvider);
-                foreach (var dir in GetSystemFontDirectories())
-                    footerFontProvider.AddDirectory(dir);
                 footerConverterProperties = new ConverterProperties();
-                footerConverterProperties.SetFontProvider(footerFontProvider);
+                footerConverterProperties.SetFontProvider(BuildFontProvider());
             }
 
             // Second pass: stamp page numbers, watermark, and/or footer onto the already-generated PDF.
-            // A new PdfDocument in stamper mode (reader+writer) must be used because
-            // HtmlConverter closes the original document before we can query page count.
-            using var inputStream = new MemoryStream(memoryStream.ToArray());
-            using var outputStream = new MemoryStream();
+            // Wrap the existing buffer in a non-resizable MemoryStream rather than copying it again.
+            using var inputStream = new MemoryStream(firstPassBytes, writable: false);
+            using var outputStream = new MemoryStream(capacity: firstPassBytes.Length + 4096);
             using (var reader = new PdfReader(inputStream))
             using (var stampWriter = new PdfWriter(outputStream))
             using (var stampDoc = new PdfDocument(reader, stampWriter))
@@ -280,11 +359,8 @@ namespace AnLar.HtmlToPdf.Services
             }
         }
 
-        private void AddBundledFonts(FontProvider fontProvider)
+        private string? ResolveBundledFontDirectory()
         {
-            int fontsAdded = 0;
-
-            // Strategy 1: Try Content files from known deployment paths
             var assembly = typeof(AccessiblePdfGenerator).Assembly;
             var assemblyDir = System.IO.Path.GetDirectoryName(assembly.Location) ?? "";
             string[] candidateDirs =
@@ -300,68 +376,55 @@ namespace AnLar.HtmlToPdf.Services
             foreach (var dir in candidateDirs)
             {
                 if (!Directory.Exists(dir))
-                {
-                    _logger.LogDebug("Font dir not found: {Dir}", dir);
                     continue;
-                }
-
-                var ttfFiles = Directory.GetFiles(dir, "*.ttf");
-                if (ttfFiles.Length == 0)
-                    continue;
-
-                _logger.LogInformation("Found {Count} fonts in: {Dir}", ttfFiles.Length, dir);
-                fontProvider.AddDirectory(dir);
-                fontsAdded += ttfFiles.Length;
-                break; // Found fonts, no need to check other paths
+                if (EnumerateFontFiles(dir).Count > 0)
+                    return dir;
             }
-
-            // Strategy 2: Try embedded resources extracted to temp dir
-            if (fontsAdded == 0)
-            {
-                _logger.LogInformation("No Content font files found, trying embedded resources...");
-                fontsAdded = ExtractAndAddEmbeddedFonts(fontProvider);
-            }
-
-            _logger.LogInformation("Total bundled fonts added: {Count}", fontsAdded);
+            return null;
         }
 
-        private int ExtractAndAddEmbeddedFonts(FontProvider fontProvider)
+        // Linux filesystems are case-sensitive, so Directory.GetFiles(dir, "*.ttf")
+        // would miss .TTF / .Ttf etc. Enumerate once and filter case-insensitively.
+        private static readonly string[] FontExtensions = [".ttf", ".otf"];
+        private static IReadOnlyList<string> EnumerateFontFiles(string dir)
+        {
+            try
+            {
+                return Directory.EnumerateFiles(dir)
+                    .Where(f => FontExtensions.Any(ext => f.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+                    .ToArray();
+            }
+            catch (DirectoryNotFoundException) { return []; }
+            catch (UnauthorizedAccessException) { return []; }
+        }
+
+        private string[] ExtractEmbeddedFontFiles()
         {
             var assembly = typeof(AccessiblePdfGenerator).Assembly;
-            var allResources = assembly.GetManifestResourceNames();
-            var ttfResources = allResources.Where(r => r.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)).ToArray();
-
-            _logger.LogInformation(
-                "Assembly: {Name}, location: {Location}, total resources: {Total}, ttf resources: {Ttf}",
-                assembly.GetName().Name, assembly.Location, allResources.Length, ttfResources.Length);
+            var ttfResources = assembly.GetManifestResourceNames()
+                .Where(r => r.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
 
             if (ttfResources.Length == 0)
-                return 0;
+                return [];
 
             var tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "AnLar.HtmlToPdf.Fonts");
             Directory.CreateDirectory(tempDir);
 
-            int count = 0;
+            var paths = new List<string>(ttfResources.Length);
             foreach (var resourceName in ttfResources)
             {
                 var targetPath = System.IO.Path.Combine(tempDir, resourceName);
                 if (!File.Exists(targetPath))
                 {
                     using var stream = assembly.GetManifestResourceStream(resourceName);
-                    if (stream == null)
-                    {
-                        _logger.LogWarning("GetManifestResourceStream returned null for {Resource}", resourceName);
-                        continue;
-                    }
+                    if (stream == null) continue;
                     using var fs = File.Create(targetPath);
                     stream.CopyTo(fs);
                 }
-                fontProvider.AddFont(targetPath);
-                count++;
-                _logger.LogInformation("Loaded embedded font: {Resource} ({Size} bytes)", resourceName, new FileInfo(targetPath).Length);
+                paths.Add(targetPath);
             }
-
-            return count;
+            return [.. paths];
         }
 
         private static string[] GetSystemFontDirectories()

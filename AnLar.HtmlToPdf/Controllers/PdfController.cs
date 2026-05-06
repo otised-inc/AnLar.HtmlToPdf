@@ -15,7 +15,7 @@ namespace AnLar.HtmlToPdf.Controllers
         }
 
         [HttpPost("/pdf")]
-        public IActionResult GeneratePdf([FromBody] PdfRequest request)
+        public async Task<IActionResult> GeneratePdf([FromBody] PdfRequest request, CancellationToken cancellationToken)
         {
             var validationError = ValidateRequest(request);
             if (validationError != null)
@@ -23,7 +23,9 @@ namespace AnLar.HtmlToPdf.Controllers
 
             var orientation = request.PageOrientation?.ToLowerInvariant() ?? "portrait";
 
-            var pdfBytes = _pdfGenerator.GenerateAccessiblePdfFromHtml(
+            // PDF generation is CPU-bound and synchronous in iText. Off-load it so
+            // the request thread isn't tied up for the duration of a long render.
+            var pdfBytes = await Task.Run(() => _pdfGenerator.GenerateAccessiblePdfFromHtml(
                 request.HtmlContent,
                 request.DocumentTitle ?? "Untitled",
                 request.DocumentLanguage ?? "en-US",
@@ -34,13 +36,13 @@ namespace AnLar.HtmlToPdf.Controllers
                 request.MarginLeft ?? 10f,
                 request.ShowPageNumbers ?? false,
                 request.Watermark,
-                request.FooterContent);
+                request.FooterContent), cancellationToken);
 
             return File(pdfBytes, "application/pdf");
         }
 
         [HttpPost("/pdf/images")]
-        public IActionResult GeneratePdfImages([FromBody] PdfRequest request)
+        public async Task<IActionResult> GeneratePdfImages([FromBody] PdfRequest request, CancellationToken cancellationToken)
         {
             var validationError = ValidateRequest(request);
             if (validationError != null)
@@ -48,7 +50,7 @@ namespace AnLar.HtmlToPdf.Controllers
 
             var orientation = request.PageOrientation?.ToLowerInvariant() ?? "portrait";
 
-            var response = _pdfGenerator.GeneratePdfPageImages(
+            var response = await Task.Run(() => _pdfGenerator.GeneratePdfPageImages(
                 request.HtmlContent,
                 request.DocumentTitle ?? "Untitled",
                 request.DocumentLanguage ?? "en-US",
@@ -59,7 +61,7 @@ namespace AnLar.HtmlToPdf.Controllers
                 request.MarginLeft ?? 10f,
                 request.ShowPageNumbers ?? false,
                 request.Watermark,
-                request.Dpi ?? 300);
+                request.Dpi ?? 300), cancellationToken);
 
             return Ok(response);
         }
