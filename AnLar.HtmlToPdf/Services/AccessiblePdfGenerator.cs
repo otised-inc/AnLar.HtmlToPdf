@@ -38,6 +38,10 @@ namespace AnLar.HtmlToPdf.Services
         // registers @font-face fonts into the FontProvider as a side effect, and a
         // shared instance accumulates that state across requests, which slows
         // subsequent renders and risks cross-request leakage.
+        //
+        // Empirically the same trap applies to a shared FontSet (FontProvider's
+        // inner registry): @font-face fonts get added to it via the per-request
+        // FontProvider wrapper, so requests after the first slow down. Don't share.
         private static IReadOnlyList<string>? _cachedFontFilePaths;
         private static readonly object _fontPathsLock = new();
 
@@ -78,13 +82,10 @@ namespace AnLar.HtmlToPdf.Services
 
                 int bundledCount = paths.Count;
 
-                // System font directories — the slow part on Windows (hundreds of files).
-                foreach (var dir in GetSystemFontDirectories())
-                {
-                    var fontFiles = EnumerateFontFiles(dir);
-                    paths.AddRange(fontFiles);
-                    _logger.LogInformation("Cached {Count} fonts from system dir {Dir}", fontFiles.Count, dir);
-                }
+                // EXPERIMENT: skip system font directories. Bundled Liberation Serif
+                // covers the default font stack; HTML with @font-face brings its own
+                // fonts. System-font lookup matters only if request HTML names a
+                // system family explicitly (e.g. "Arial") with no @font-face fallback.
 
                 _logger.LogInformation("Font path cache: {Total} files ({Bundled} bundled, {System} system)",
                     paths.Count, bundledCount, paths.Count - bundledCount);
@@ -143,6 +144,10 @@ namespace AnLar.HtmlToPdf.Services
 
             var writerProperties = new WriterProperties();
             writerProperties.SetPdfVersion(PdfVersion.PDF_1_7);
+            // EXPERIMENT: trade compression for speed. iText defaults to deflate level 9
+            // (BEST_COMPRESSION). For an interactive request/response service, BEST_SPEED
+            // (level 1) cuts the write phase substantially at modest size cost.
+            writerProperties.SetCompressionLevel(iText.Kernel.Pdf.CompressionConstants.BEST_SPEED);
 
             using (var pdfWriter = new PdfWriter(memoryStream, writerProperties))
             using (var pdfDocument = new PdfDocument(pdfWriter))
