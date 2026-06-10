@@ -8,6 +8,14 @@ namespace AnLar.HtmlToPdf.Controllers
     [ApiController]
     public class PdfController : ControllerBase
     {
+        // JsonSerializerOptions caches type metadata internally — reuse one
+        // instance instead of rebuilding that cache on every streaming request.
+        private static readonly JsonSerializerOptions NdjsonSerializerOptions = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        };
+        private static readonly byte[] NdjsonNewline = [(byte)'\n'];
+
         private readonly AccessiblePdfGenerator _pdfGenerator;
 
         public PdfController(AccessiblePdfGenerator pdfGenerator)
@@ -92,12 +100,6 @@ namespace AnLar.HtmlToPdf.Controllers
             var bufferingFeature = HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>();
             bufferingFeature?.DisableBuffering();
 
-            var jsonOptions = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            };
-            var newline = new byte[] { (byte)'\n' };
-
             var pages = _pdfGenerator.GeneratePdfPageImagesStreamAsync(
                 request.HtmlContent,
                 request.DocumentTitle ?? "Untitled",
@@ -114,8 +116,8 @@ namespace AnLar.HtmlToPdf.Controllers
 
             await foreach (var page in pages.ConfigureAwait(false))
             {
-                await JsonSerializer.SerializeAsync(Response.Body, page, jsonOptions, cancellationToken);
-                await Response.Body.WriteAsync(newline, cancellationToken);
+                await JsonSerializer.SerializeAsync(Response.Body, page, NdjsonSerializerOptions, cancellationToken);
+                await Response.Body.WriteAsync(NdjsonNewline, cancellationToken);
                 await Response.Body.FlushAsync(cancellationToken);
             }
         }

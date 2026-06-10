@@ -3,6 +3,7 @@ using iText.Html2pdf;
 using iText.Html2pdf.Attach;
 using iText.Html2pdf.Attach.Impl;
 using iText.Html2pdf.Attach.Impl.Tags;
+using iText.IO.Font;
 using iText.IO.Font.Constants;
 using iText.Kernel.Font;
 using iText.Kernel.Pdf;
@@ -44,6 +45,15 @@ namespace AnLar.HtmlToPdf.Services
         // FontProvider wrapper, so requests after the first slow down. Don't share.
         private static IReadOnlyList<string>? _cachedFontFilePaths;
         private static readonly object _fontPathsLock = new();
+
+        // Parsed FontPrograms, by contrast, ARE safe to share: they are immutable
+        // after construction and iText itself shares them process-wide via its
+        // static FontCache. Caching them here means each request skips re-reading
+        // and re-parsing the font files (which happens once per BuildFontProvider
+        // call otherwise — twice per request when a footer is stamped). This
+        // matters most on Azure App Service, where the content share is
+        // network-backed and per-request file reads are expensive.
+        private static IReadOnlyList<FontProgram>? _cachedFontPrograms;
 
         // Tag worker factory has no per-request state — share it.
         private static readonly AccessibleTagWorkerFactory _tagWorkerFactory = new();
@@ -95,14 +105,35 @@ namespace AnLar.HtmlToPdf.Services
             }
         }
 
+        private IReadOnlyList<FontProgram> GetCachedFontPrograms()
+        {
+            if (_cachedFontPrograms != null)
+                return _cachedFontPrograms;
+
+            var paths = GetCachedFontFilePaths();
+            lock (_fontPathsLock)
+            {
+                if (_cachedFontPrograms != null)
+                    return _cachedFontPrograms;
+
+                var programs = new List<FontProgram>(paths.Count);
+                foreach (var path in paths)
+                {
+                    try { programs.Add(FontProgramFactory.CreateFont(path)); }
+                    catch { /* skip unreadable/corrupt fonts silently — same as AddDirectory's behavior */ }
+                }
+                _cachedFontPrograms = programs;
+                return _cachedFontPrograms;
+            }
+        }
+
         private FontProvider BuildFontProvider()
         {
+            // Fresh FontProvider per request (see note above), but fed from the
+            // shared FontProgram cache so no font file is re-read or re-parsed.
             var fp = new FontProvider();
-            foreach (var path in GetCachedFontFilePaths())
-            {
-                try { fp.AddFont(path); }
-                catch { /* skip unreadable/corrupt fonts silently — same as AddDirectory's behavior */ }
-            }
+            foreach (var program in GetCachedFontPrograms())
+                fp.AddFont(program);
             return fp;
         }
 
@@ -119,6 +150,17 @@ namespace AnLar.HtmlToPdf.Services
                 var props = new ConverterProperties();
                 props.SetFontProvider(BuildFontProvider());
                 HtmlConverter.ConvertToPdf("<p>warmup</p>", ms, props);
+
+                // Also pre-load the PDFium and SkiaSharp native libraries by
+                // rendering + encoding the warmup page at minimal DPI, so the
+                // first /pdf/images request doesn't pay that cost.
+                var warmupPdf = ms.ToArray();
+                foreach (var bitmap in Conversion.ToImages(warmupPdf, options: new RenderOptions { Dpi = 36 }))
+                {
+                    using (bitmap)
+                    using (bitmap.Encode(SKEncodedImageFormat.Png, 100)) { }
+                }
+
                 _logger.LogInformation("PDF generator warm-up complete");
             }
             catch (Exception ex)
@@ -140,7 +182,11 @@ namespace AnLar.HtmlToPdf.Services
             string? watermark = null,
             string? footerContent = null)
         {
-            using var memoryStream = new MemoryStream();
+            // Pre-size the buffer from the HTML length (rough heuristic, clamped)
+            // so large documents don't churn through repeated doubling copies on
+            // the large-object heap.
+            int initialCapacity = Math.Clamp(htmlContent.Length / 2, 16 * 1024, 4 * 1024 * 1024);
+            using var memoryStream = new MemoryStream(initialCapacity);
 
             var writerProperties = new WriterProperties();
             writerProperties.SetPdfVersion(PdfVersion.PDF_1_7);
@@ -152,6 +198,11 @@ namespace AnLar.HtmlToPdf.Services
             using (var pdfWriter = new PdfWriter(memoryStream, writerProperties))
             using (var pdfDocument = new PdfDocument(pdfWriter))
             {
+                // Keep the MemoryStream open after HtmlConverter closes the writer,
+                // so the stamping pass below can wrap the underlying buffer directly
+                // instead of paying ToArray()'s full-size copy.
+                pdfWriter.SetCloseStream(false);
+
                 pdfDocument.SetTagged();
                 pdfDocument.GetCatalog().SetLang(new PdfString(documentLanguage));
                 pdfDocument.GetCatalog().SetViewerPreferences(
@@ -182,12 +233,8 @@ namespace AnLar.HtmlToPdf.Services
 
             bool needsStamping = showPageNumbers || !string.IsNullOrWhiteSpace(watermark) || !string.IsNullOrWhiteSpace(footerContent);
 
-            // HtmlConverter closes the underlying stream, but MemoryStream.ToArray()
-            // still works after close. Capture the first-pass bytes once and reuse.
-            var firstPassBytes = memoryStream.ToArray();
-
             if (!needsStamping)
-                return firstPassBytes;
+                return memoryStream.ToArray();
 
             // Build a fresh FontProvider for the footer pass (fast — paths are cached).
             ConverterProperties? footerConverterProperties = null;
@@ -198,11 +245,16 @@ namespace AnLar.HtmlToPdf.Services
             }
 
             // Second pass: stamp page numbers, watermark, and/or footer onto the already-generated PDF.
-            // Wrap the existing buffer in a non-resizable MemoryStream rather than copying it again.
-            using var inputStream = new MemoryStream(firstPassBytes, writable: false);
-            using var outputStream = new MemoryStream(capacity: firstPassBytes.Length + 4096);
+            // Wrap the first pass's live buffer directly — zero copies of the input.
+            int firstPassLength = (int)memoryStream.Length;
+            using var inputStream = new MemoryStream(memoryStream.GetBuffer(), 0, firstPassLength, writable: false);
+            using var outputStream = new MemoryStream(capacity: firstPassLength + 4096);
+            // Match the first pass's speed-over-compression trade-off; the default
+            // writer would re-deflate new content streams at a slower level.
+            var stampWriterProperties = new WriterProperties()
+                .SetCompressionLevel(iText.Kernel.Pdf.CompressionConstants.BEST_SPEED);
             using (var reader = new PdfReader(inputStream))
-            using (var stampWriter = new PdfWriter(outputStream))
+            using (var stampWriter = new PdfWriter(outputStream, stampWriterProperties))
             using (var stampDoc = new PdfDocument(reader, stampWriter))
             {
                 if (!string.IsNullOrWhiteSpace(watermark))
@@ -413,9 +465,15 @@ namespace AnLar.HtmlToPdf.Services
         private static void AddFooter(PdfDocument pdfDocument, string footerHtml, ConverterProperties converterProperties)
         {
             int totalPages = pdfDocument.GetNumberOfPages();
-            bool hasPlaceholders = footerHtml.Contains("{pageNumber}") || footerHtml.Contains("{totalPages}");
 
-            // If no placeholders, convert once and reuse for all pages
+            // {totalPages} is the same on every page — substitute it once up front.
+            // Only {pageNumber} forces a per-page HTML conversion; footers using
+            // just {totalPages} (or no placeholders) share one converted element tree.
+            if (footerHtml.Contains("{totalPages}"))
+                footerHtml = footerHtml.Replace("{totalPages}", totalPages.ToString());
+            bool hasPlaceholders = footerHtml.Contains("{pageNumber}");
+
+            // If no per-page placeholders, convert once and reuse for all pages
             var sharedElements = hasPlaceholders ? null : HtmlConverter.ConvertToElements(footerHtml, converterProperties);
 
             for (int i = 1; i <= totalPages; i++)
@@ -434,11 +492,9 @@ namespace AnLar.HtmlToPdf.Services
                     pageSize.GetWidth() - 2 * horizontalMargin,
                     footerHeight);
 
-                // Replace placeholders per-page if present
+                // Replace the per-page placeholder if present
                 var elements = sharedElements ?? HtmlConverter.ConvertToElements(
-                    footerHtml
-                        .Replace("{pageNumber}", i.ToString())
-                        .Replace("{totalPages}", totalPages.ToString()),
+                    footerHtml.Replace("{pageNumber}", i.ToString()),
                     converterProperties);
 
                 var pdfCanvas = new PdfCanvas(page);
@@ -469,6 +525,11 @@ namespace AnLar.HtmlToPdf.Services
             var grayColor = new DeviceRgb(200, 200, 200);
             var gs = new PdfExtGState().SetFillOpacity(0.3f);
 
+            // Text width and rotation are page-independent — compute them once.
+            float textWidth = font.GetWidth(watermarkText, fontSize);
+            float cos = (float)Math.Cos(Math.PI / 4);
+            float sin = (float)Math.Sin(Math.PI / 4);
+
             for (int i = 1; i <= totalPages; i++)
             {
                 var page = pdfDocument.GetPage(i);
@@ -477,9 +538,6 @@ namespace AnLar.HtmlToPdf.Services
                 float centerY = pageSize.GetHeight() / 2f;
 
                 // Offset by half the text width so the watermark is visually centered
-                float textWidth = font.GetWidth(watermarkText, fontSize);
-                float cos = (float)Math.Cos(Math.PI / 4);
-                float sin = (float)Math.Sin(Math.PI / 4);
                 float x = centerX - (textWidth / 2f) * cos;
                 float y = centerY - (textWidth / 2f) * sin;
 
@@ -613,8 +671,11 @@ namespace AnLar.HtmlToPdf.Services
             float marginBottom,
             float marginLeft)
         {
-            if (htmlContent.TrimStart().StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase)
-                || htmlContent.TrimStart().StartsWith("<html", StringComparison.OrdinalIgnoreCase))
+            // Span-based prefix check — TrimStart() on a string would copy the
+            // whole (potentially multi-MB) HTML document just to inspect the start.
+            var trimmed = htmlContent.AsSpan().TrimStart();
+            if (trimmed.StartsWith("<!DOCTYPE", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("<html", StringComparison.OrdinalIgnoreCase))
             {
                 return htmlContent;
             }
