@@ -1,0 +1,62 @@
+name: Deploy AnLar HtmlToPdf to Dev
+
+on:
+  push:
+    branches:
+      [master]
+
+env:
+  NETCORE_VERSION: "10.0.x"
+
+jobs:
+  build:
+    name: Deploy AnLar HtmlToPdf to Dev
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET Core ${{ env.NETCORE_VERSION }}
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.NETCORE_VERSION }}
+          include-prerelease: false
+
+      - name: Restore packages
+        run: dotnet restore
+
+      - name: Build with dotnet
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Test with dotnet
+        run: dotnet test --configuration Release --no-build
+
+      # https://github.com/dotnet/core/issues/8194#issuecomment-1432378404
+      - name: dotnet publish
+        run: dotnet publish ./AnLar.HtmlToPdf -c Release -o ${{env.DOTNET_ROOT}}/myapp
+
+      - name: Deploy to Azure Web App
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: "cdehtmltopdfimagedev"
+          slot-name: "Production"
+          publish-profile: ${{ secrets.CDEHTMLTOPDFIMAGEDEV_PUBLISH_PROFILE }}
+          package: ${{env.DOTNET_ROOT}}/myapp
+
+      - name: Notify Slack on failure
+        if: always()
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: ${{ job.status }}
+          notification_title: "{workflow} has {status_message} in the master branch"
+          message_format: "{emoji} *{workflow}* {status_message} in <{repo_url}|{repo}>"
+          footer: "Linked Repo <{repo_url}|{repo}>"
+          notify_when: "failure"
+          mention_groups: "!channel"
+          mention_users_when: "failure"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.DEVOPS_SLACK_WEBHOOK }}
