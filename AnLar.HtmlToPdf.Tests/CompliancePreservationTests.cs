@@ -68,21 +68,29 @@ namespace AnLar.HtmlToPdf.Tests
             Assert.True(CountStructureElements(structTreeRoot, "H1") > 0, "H1 must survive stamping");
             Assert.True(CountStructureElements(structTreeRoot, "Figure") > 0, "Figure must survive stamping");
 
-            // Body (Type0/CID) fonts must be embedded on every page
-            for (int i = 1; i <= pdfDoc.GetNumberOfPages(); i++)
-            {
-                var fonts = pdfDoc.GetPage(i).GetResources()?.GetResource(PdfName.Font);
-                if (fonts == null) continue;
-                foreach (var key in fonts.KeySet())
-                {
-                    var fontDict = fonts.GetAsDictionary(key);
-                    if (fontDict != null && PdfName.Type0.Equals(fontDict.GetAsName(PdfName.Subtype)))
-                    {
-                        Assert.True(HasEmbeddedFontFile(fontDict),
-                            $"Type0 font on page {i} must be embedded for 508 compliance");
-                    }
-                }
-            }
+            // Every font on every page must be embedded — including the fonts
+            // used by stamped overlays (page numbers, watermark, footer)
+            AssertAllFontsEmbedded(pdfDoc);
+        }
+
+        [Fact]
+        public void Overlays_PageNumbersAndWatermark_UseEmbeddedFonts()
+        {
+            // Page numbers and watermark are the only overlay text not driven by
+            // the HTML font provider — they must not fall back to a standard
+            // (never-embedded) base-14 font
+            var pdfBytes = _generator.GenerateAccessiblePdfFromHtml(
+                "<h1>Overlay Font Test</h1><p>Body.</p>", "Doc",
+                showPageNumbers: true,
+                watermark: "DRAFT");
+
+            using var pdfDoc = new PdfDocument(new PdfReader(new MemoryStream(pdfBytes)));
+            AssertAllFontsEmbedded(pdfDoc);
+
+            // The overlays must still render their text
+            var text = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(1));
+            Assert.Contains("Page 1 of", text);
+            Assert.Contains("DRAFT", text);
         }
 
         [Fact]
@@ -153,6 +161,22 @@ namespace AnLar.HtmlToPdf.Tests
             {
                 var text = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(i));
                 Assert.Contains($"Page {i} of {totalPages}", text);
+            }
+        }
+
+        private static void AssertAllFontsEmbedded(PdfDocument pdfDoc)
+        {
+            for (int i = 1; i <= pdfDoc.GetNumberOfPages(); i++)
+            {
+                var fonts = pdfDoc.GetPage(i).GetResources()?.GetResource(PdfName.Font);
+                if (fonts == null) continue;
+                foreach (var key in fonts.KeySet())
+                {
+                    var fontDict = fonts.GetAsDictionary(key);
+                    if (fontDict == null) continue;
+                    Assert.True(HasEmbeddedFontFile(fontDict),
+                        $"Font '{fontDict.GetAsName(PdfName.BaseFont)}' on page {i} must be embedded for 508 compliance");
+                }
             }
         }
 

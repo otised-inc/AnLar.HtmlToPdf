@@ -138,6 +138,41 @@ namespace AnLar.HtmlToPdf.Services
         }
 
         /// <summary>
+        /// Creates the font used for stamped overlays (page numbers, watermark).
+        /// PDF/UA requires every font used for rendering to be embedded — artifacts
+        /// included — so this picks the bundled Liberation Serif face and embeds a
+        /// subset, instead of the standard (never-embedded) Helvetica. Falls back
+        /// to Helvetica only if no bundled font is available, favoring a rendered
+        /// page over a failed request.
+        /// </summary>
+        private PdfFont CreateOverlayFont(bool bold)
+        {
+            FontProgram? styleMatch = null;
+            foreach (var program in GetCachedFontPrograms())
+            {
+                var names = program.GetFontNames();
+                if (names.IsItalic() || names.IsBold() != bold)
+                    continue;
+                var psName = names.GetFontName() ?? "";
+                if (psName.StartsWith("LiberationSerif", StringComparison.OrdinalIgnoreCase))
+                {
+                    styleMatch = program;
+                    break;
+                }
+                styleMatch ??= program;
+            }
+
+            if (styleMatch != null)
+            {
+                return PdfFontFactory.CreateFont(styleMatch, PdfEncodings.IDENTITY_H,
+                    PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
+            }
+
+            _logger.LogWarning("No bundled font available for overlay text; falling back to non-embedded Helvetica");
+            return PdfFontFactory.CreateFont(bold ? StandardFonts.HELVETICA_BOLD : StandardFonts.HELVETICA);
+        }
+
+        /// <summary>
         /// Pre-warms iText static initialization (CSS parser, default styles, font
         /// scanning) so the first real request doesn't pay that cost.
         /// </summary>
@@ -435,10 +470,10 @@ namespace AnLar.HtmlToPdf.Services
             }
         }
 
-        private static void AddPageNumbers(PdfDocument pdfDocument)
+        private void AddPageNumbers(PdfDocument pdfDocument)
         {
             int totalPages = pdfDocument.GetNumberOfPages();
-            var font = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+            var font = CreateOverlayFont(bold: false);
             const float fontSize = 9f;
 
             for (int i = 1; i <= totalPages; i++)
@@ -517,10 +552,10 @@ namespace AnLar.HtmlToPdf.Services
             }
         }
 
-        private static void AddWatermark(PdfDocument pdfDocument, string watermarkText)
+        private void AddWatermark(PdfDocument pdfDocument, string watermarkText)
         {
             int totalPages = pdfDocument.GetNumberOfPages();
-            var font = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
+            var font = CreateOverlayFont(bold: true);
             const float fontSize = 60f;
             var grayColor = new DeviceRgb(200, 200, 200);
             var gs = new PdfExtGState().SetFillOpacity(0.3f);
