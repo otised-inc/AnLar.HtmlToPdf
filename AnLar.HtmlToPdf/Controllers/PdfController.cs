@@ -45,7 +45,8 @@ namespace AnLar.HtmlToPdf.Controllers
                 request.MarginLeft ?? 10f,
                 request.ShowPageNumbers ?? false,
                 request.Watermark,
-                request.FooterContent), cancellationToken);
+                request.FooterContent,
+                request.Accessible ?? true), cancellationToken);
 
             return File(pdfBytes, "application/pdf");
         }
@@ -70,7 +71,11 @@ namespace AnLar.HtmlToPdf.Controllers
                 request.MarginLeft ?? 10f,
                 request.ShowPageNumbers ?? false,
                 request.Watermark,
-                request.Dpi ?? 300), cancellationToken);
+                request.Dpi ?? 300,
+                request.FooterContent,
+                // Output is a rasterized PNG — the tag tree is pure waste here, so
+                // default to the fast (untagged) path unless explicitly requested.
+                request.Accessible ?? false), cancellationToken);
 
             return Ok(response);
         }
@@ -112,6 +117,9 @@ namespace AnLar.HtmlToPdf.Controllers
                 request.ShowPageNumbers ?? false,
                 request.Watermark,
                 request.Dpi ?? 300,
+                request.FooterContent,
+                // Raster output — default to the fast (untagged) path.
+                request.Accessible ?? false,
                 cancellationToken);
 
             await foreach (var page in pages.ConfigureAwait(false))

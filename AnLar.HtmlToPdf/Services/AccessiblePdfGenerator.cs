@@ -180,7 +180,8 @@ namespace AnLar.HtmlToPdf.Services
             float marginLeft = 10f,
             bool showPageNumbers = false,
             string? watermark = null,
-            string? footerContent = null)
+            string? footerContent = null,
+            bool accessible = true)
         {
             // Pre-size the buffer from the HTML length (rough heuristic, clamped)
             // so large documents don't churn through repeated doubling copies on
@@ -203,21 +204,35 @@ namespace AnLar.HtmlToPdf.Services
                 // instead of paying ToArray()'s full-size copy.
                 pdfWriter.SetCloseStream(false);
 
-                pdfDocument.SetTagged();
-                pdfDocument.GetCatalog().SetLang(new PdfString(documentLanguage));
-                pdfDocument.GetCatalog().SetViewerPreferences(
-                    new PdfViewerPreferences().SetDisplayDocTitle(true));
+                // Accessibility (508 / PDF-UA) machinery is the dominant per-request
+                // cost: tagging builds a full structure tree and wraps every element
+                // in marked content. The fast path (accessible == false) skips it and
+                // produces a plain, untagged PDF.
+                if (accessible)
+                {
+                    pdfDocument.SetTagged();
+                    pdfDocument.GetCatalog().SetLang(new PdfString(documentLanguage));
+                    pdfDocument.GetCatalog().SetViewerPreferences(
+                        new PdfViewerPreferences().SetDisplayDocTitle(true));
+                }
 
+                // Title is plain metadata (not an accessibility cost) — keep it always.
                 var documentInfo = pdfDocument.GetDocumentInfo();
                 documentInfo.SetTitle(documentTitle);
 
-                SetPdfUaXmpMetadata(pdfDocument, documentTitle);
+                if (accessible)
+                    SetPdfUaXmpMetadata(pdfDocument, documentTitle);
 
                 var fontProvider = BuildFontProvider();
 
                 var converterProperties = new ConverterProperties();
                 converterProperties.SetFontProvider(fontProvider);
-                converterProperties.SetTagWorkerFactory(_tagWorkerFactory);
+                // The custom tag-worker factory only wires accessibility roles
+                // (headings, image Figure/alt) — pointless on an untagged document.
+                if (accessible)
+                    converterProperties.SetTagWorkerFactory(_tagWorkerFactory);
+                // Bookmarks/outline are a navigation aid, not a 508 requirement — keep
+                // them in both modes; they cost little.
                 converterProperties.SetOutlineHandler(OutlineHandler.CreateStandardHandler());
 
                 // Ensure bottom margin has room for footer content
@@ -279,12 +294,14 @@ namespace AnLar.HtmlToPdf.Services
             float marginLeft = 10f,
             bool showPageNumbers = false,
             string? watermark = null,
-            int dpi = 300)
+            int dpi = 300,
+            string? footerContent = null,
+            bool accessible = false)
         {
             var pdfBytes = GenerateAccessiblePdfFromHtml(
                 htmlContent, documentTitle, documentLanguage, pageOrientation,
                 marginTop, marginRight, marginBottom, marginLeft,
-                showPageNumbers, watermark);
+                showPageNumbers, watermark, footerContent, accessible);
 
             var renderOptions = new RenderOptions { Dpi = dpi };
 
@@ -356,12 +373,14 @@ namespace AnLar.HtmlToPdf.Services
             bool showPageNumbers = false,
             string? watermark = null,
             int dpi = 300,
+            string? footerContent = null,
+            bool accessible = false,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             var pdfBytes = GenerateAccessiblePdfFromHtml(
                 htmlContent, documentTitle, documentLanguage, pageOrientation,
                 marginTop, marginRight, marginBottom, marginLeft,
-                showPageNumbers, watermark);
+                showPageNumbers, watermark, footerContent, accessible);
 
             var renderOptions = new RenderOptions { Dpi = dpi };
             int pageCount = Conversion.GetPageCount(pdfBytes);

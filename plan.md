@@ -1,91 +1,111 @@
-# Plan: Add HTML Page Footer Support
+# Plan: Fast (non-508-compliant) PDF processing mode
 
-## Overview
-Add an HTML footer that renders on every page of the generated PDF. The footer content is passed as HTML via a `FooterContent` property, rendered using iText's `HtmlConverter.ConvertToElements()`, and stamped onto each page in the second pass. The footer is marked as a PDF artifact so screen readers skip it, maintaining PDF/UA accessibility compliance.
+## Goal
+Add an **opt-in fast path** that generates a plain, *untagged* PDF — trading away
+508 / PDF-UA accessibility for speed. The default behavior stays fully accessible
+(backward compatible); callers explicitly request the fast path per request.
 
-## Approach: HTML Footer via Stamping Pass
+## Why this is faster
+The current generator always produces a tagged PDF/UA document. The accessibility
+work is the dominant per-request overhead:
 
-The footer uses **the same two-pass architecture** as existing page numbers and watermarks:
+1. **`pdfDocument.SetTagged()`** — iText builds and maintains a full structure
+   (tag) tree as every element is laid out. This is the biggest single cost; an
+   untagged document skips the entire structure-tree construction and the marked-
+   content operators that wrap every piece of text/figure.
+2. **Custom `AccessibleTagWorkerFactory`** — extra per-element tag workers for
+   headings (H1–H6 role wiring) and images (Figure role + alt-text resolution).
+3. **PDF/UA XMP metadata** + `pdfuaid` schema registration, `SetLang`,
+   `DisplayDocTitle` viewer preference.
 
-1. **Pass 1**: Convert main body HTML to PDF (existing behavior, unchanged).
-2. **Pass 2 (stamping)**: Re-open the PDF, and for each page:
-   - Convert the footer HTML into iText layout elements using `HtmlConverter.ConvertToElements()`.
-   - Create an `iText.Layout.Canvas` targeting a `Rectangle` in the bottom margin area of the page.
-   - Mark the canvas content as a PDF artifact (`PdfName.Artifact`) for accessibility.
-   - Add the converted elements to the canvas, which renders the HTML footer.
+Fast mode skips 1–3, so iText runs its plain layout pipeline.
 
-This approach means the footer supports **any HTML**: styled text, tables, images, links, etc. The same `ConverterProperties` (font provider, etc.) used for the main document are reused for the footer so fonts resolve consistently.
+## Design
+
+Add a single nullable boolean to the request: **`Accessible`** (default `true`).
+
+- `Accessible == true` (or omitted) → current behavior, unchanged.
+- `Accessible == false` → fast path: untagged PDF, default tag-worker factory,
+  no PDF/UA XMP.
+
+Naming chosen as `Accessible` (rather than `FastMode`) because it names the
+*property of the output* rather than an implementation detail, and reads well as
+a default-true opt-out. The README and code already frame everything around
+"accessible PDFs", so `accessible: false` is the natural inverse.
+
+Stamping features (page numbers, watermark, footer) keep working in both modes.
+Their artifact marked-content is harmless on an untagged doc, so that code is
+unchanged.
 
 ## Changes
 
-### 1. Add `FooterContent` property to `PdfRequest` DTO
-**File:** `AnLar.HtmlToPdf/DTOs/PdfRequest.cs`
+### 1. `DTOs/PdfRequest.cs`
+- Add `public bool? Accessible { get; set; }` with an XML-doc comment explaining
+  that `false` produces a faster, non-508-compliant (untagged) PDF; default `true`.
+- (Drive-by) fix the malformed XML-doc comment above `Dpi` (missing `<summary>`
+  opening tag) while editing this file.
 
-Add one new property:
-- **`FooterContent`** (`string?`, default `null`) — HTML content to render as a footer on every page. When null or empty, no footer is rendered. Can contain any valid HTML/CSS (inline styles, tables, images, etc.).
+### 2. `Services/AccessiblePdfGenerator.cs`
+- Add parameter `bool accessible = true` to `GenerateAccessiblePdfFromHtml`
+  (keep it last so existing positional callers/tests are unaffected).
+- Guard the accessibility setup behind `if (accessible)`:
+  - `SetTagged()`, `SetLang(...)`, `SetViewerPreferences(DisplayDocTitle)`,
+    and `SetPdfUaXmpMetadata(...)`.
+  - `documentInfo.SetTitle(documentTitle)` stays in **both** modes (cheap, useful
+    metadata, not accessibility-specific).
+- Only attach the custom tag-worker factory when `accessible`:
+  `if (accessible) converterProperties.SetTagWorkerFactory(_tagWorkerFactory);`
+  In fast mode iText uses its default workers (no Figure/heading role wiring).
+  `OutlineHandler` (bookmarks) is **kept in both modes** — bookmarks are a
+  navigation convenience, not a 508 requirement, and cost little.
+- Thread `accessible` through to `GeneratePdfPageImages` and
+  `GeneratePdfPageImagesStreamAsync` as a parameter.
+  - **Default the image endpoints to `accessible = false`**: their output is a
+    rasterized PNG, so the structure tree is pure waste there. This is a free
+    speed win with no observable output difference. (Call out for review — easy
+    to make it honor the request flag instead if preferred.)
+  - Also pass `request.FooterContent` through from these image paths, which is
+    currently dropped (minor pre-existing gap; fixing it keeps parity with `/pdf`).
 
-### 2. Thread `FooterContent` through the controller
-**File:** `AnLar.HtmlToPdf/Controllers/PdfController.cs`
+### 3. `Controllers/PdfController.cs`
+- `/pdf`: pass `request.Accessible ?? true` as the new argument.
+- `/pdf/images` and `/pdf/images/stream`: pass `request.Accessible ?? false`
+  (raster output — fast by default), and also forward `request.FooterContent`.
 
-- Pass `request.FooterContent` to `GenerateAccessiblePdfFromHtml()`.
-- No special validation needed — the HTML is passed through to iText's converter.
+### 4. Tests — `AnLar.HtmlToPdf.Tests/FastModeTests.cs` (new)
+Following the existing `FooterTests` pattern (NullLogger, read back with `PdfReader`):
+1. `GeneratePdf_AccessibleFalse_ProducesUntaggedPdf` — `accessible:false` →
+   `pdfDoc.IsTagged()` is **false**, still a valid multi-byte PDF, ≥1 page.
+2. `GeneratePdf_AccessibleTrue_ProducesTaggedPdf` — `accessible:true` →
+   `IsTagged()` true (regression guard for the default).
+3. `GeneratePdf_AccessibleDefault_IsTagged` — omitting the arg defaults to tagged.
+4. `GeneratePdf_FastMode_WithStampingFeatures_ProducesValidPdf` — fast mode +
+   page numbers + watermark + footer still produces a valid, untagged PDF.
+5. `GeneratePdf_FastMode_NoPdfUaMetadata` — fast-mode output has no `pdfuaid`
+   part in XMP (assert metadata absent / not PDF-UA).
 
-### 3. Update `GenerateAccessiblePdfFromHtml` signature and flow
-**File:** `AnLar.HtmlToPdf/Services/AccessiblePdfGenerator.cs`
+### 5. `README.md`
+- Add the `accessible` field to the `POST /pdf` request table (default `true`,
+  "set `false` for a faster, non-accessible/untagged PDF").
+- Add a short note that `/pdf/images*` render untagged by default since output is
+  raster.
 
-Add parameter: `string? footerContent = null`
-
-Update the method flow:
-- Build `ConverterProperties` (font provider, tag worker factory) **before** the first pass and store it so it can be reused in the stamping pass for footer HTML conversion.
-- Update `needsStamping` to also trigger when `footerContent` is non-empty.
-- Pass `converterProperties` and `footerContent` to the new `AddFooter` method.
-
-### 4. Implement `AddFooter` method
-**File:** `AnLar.HtmlToPdf/Services/AccessiblePdfGenerator.cs`
-
-New private static method:
-```
-AddFooter(PdfDocument stampDoc, string footerHtml, ConverterProperties converterProperties)
-```
-
-For each page in the document:
-1. Get page dimensions via `page.GetPageSize()`.
-2. Define a footer `Rectangle` in the bottom margin area (e.g., full page width with a height of ~50pt, positioned at the bottom of the page). Use a margin inset of ~36pt (0.5in) on left/right to keep the footer within printable area.
-3. Create a `PdfCanvas` on the page.
-4. Call `canvas.BeginMarkedContent(PdfName.Artifact)` to mark the entire footer as an artifact.
-5. Create an `iText.Layout.Canvas` (the high-level layout canvas) from the `PdfCanvas` and the footer rectangle.
-6. Convert the footer HTML to elements via `HtmlConverter.ConvertToElements(footerHtml, converterProperties)`.
-7. Add each element to the layout canvas.
-8. Close the layout canvas and call `pdfCanvas.EndMarkedContent()`.
-
-This renders fully styled HTML in the footer area of every page, marked as an artifact for PDF/UA compliance.
-
-### 5. Adjust bottom margin when footer is active
-**File:** `AnLar.HtmlToPdf/Services/AccessiblePdfGenerator.cs`
-
-In `GenerateAccessiblePdfFromHtml`, when `footerContent` is non-empty, clamp `marginBottom` to at least 20mm so the main body content doesn't overlap the footer area.
-
-### 6. Add tests
-**File:** `AnLar.HtmlToPdf.Tests/FooterTests.cs` (new file)
-
-Tests:
-1. **`GeneratePdf_WithFooterContent_ProducesValidPdf`** — Simple HTML footer (`<p>Footer text</p>`) produces a valid PDF.
-2. **`GeneratePdf_WithStyledFooterContent_ProducesValidPdf`** — Footer with inline CSS styling renders without error.
-3. **`GeneratePdf_WithFooterAndPageNumbers_ProducesValidPdf`** — Footer and `ShowPageNumbers=true` coexist on the same page.
-4. **`GeneratePdf_WithFooterAndWatermark_ProducesValidPdf`** — Footer and watermark coexist.
-5. **`GeneratePdf_WithNoFooterContent_MatchesOriginalBehavior`** — Null/empty footer produces the same output as before (no regression).
-
-## File Summary
+## File summary
 | File | Action |
 |------|--------|
-| `DTOs/PdfRequest.cs` | Add `FooterContent` property |
-| `Controllers/PdfController.cs` | Pass `FooterContent` to generator |
-| `Services/AccessiblePdfGenerator.cs` | Add param, refactor `ConverterProperties` for reuse, implement `AddFooter()` method, update stamping logic, margin clamping |
-| `Tests/FooterTests.cs` | New test file with 5 tests |
+| `DTOs/PdfRequest.cs` | Add `Accessible` flag; fix `Dpi` doc comment |
+| `Services/AccessiblePdfGenerator.cs` | `accessible` param; gate tagging/XMP/tag-worker; thread through image methods (+forward footer) |
+| `Controllers/PdfController.cs` | Pass `Accessible`; default image endpoints to fast; forward footer |
+| `AnLar.HtmlToPdf.Tests/FastModeTests.cs` | New test file (5 tests) |
+| `README.md` | Document the flag |
 
-## Key Design Decisions
-- **HTML, not plain text**: Full HTML support means users can style footers with CSS, use tables for multi-column layouts, include images/logos, etc.
-- **Single property**: Just `FooterContent` — alignment, font size, styling are all controlled via HTML/CSS within the content itself (e.g., `<div style="text-align:right; font-size:8pt">...</div>`).
-- **Reuse ConverterProperties**: The footer HTML uses the same font provider and converter settings as the main document, so custom/bundled fonts work in the footer too.
-- **Artifact marking**: The entire footer is wrapped in `BeginMarkedContent(PdfName.Artifact)` / `EndMarkedContent()` so screen readers and PDF/UA validators ignore it.
-- **Same footer on every page**: The same HTML is rendered on each page. Dynamic per-page content (like page numbers) is not supported in this iteration since iText's `ConvertToElements` doesn't have a page-number concept.
+## Key decisions
+- **Default stays accessible** — no behavior change unless `accessible:false`.
+- **Title kept in both modes** — it's metadata, not tagging cost.
+- **Bookmarks kept in both modes** — navigation aid, not a 508 requirement.
+- **Image endpoints fast by default** — raster output never benefits from tags.
+
+## Verification
+- `dotnet build -c Release` then `dotnet test`.
+- (Optional) quick local timing: POST the same large HTML with `accessible:true`
+  vs `false` and compare response latency.

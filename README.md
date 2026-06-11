@@ -58,7 +58,8 @@ Converts HTML content to an accessible PDF.
   "marginLeft": 10,
   "showPageNumbers": false,
   "watermark": "DRAFT",
-  "footerContent": "<p style='text-align:center; font-size:8pt;'>Company Confidential</p>"
+  "footerContent": "<p style='text-align:center; font-size:8pt;'>Company Confidential</p>",
+  "accessible": true
 }
 ```
 
@@ -75,8 +76,11 @@ Converts HTML content to an accessible PDF.
 | `showPageNumbers`  | boolean | No       | `false`        | When `true`, adds "Page X of Y" centered at the bottom of each page |
 | `watermark`        | string  | No       | `null`         | Diagonal watermark text rendered on every page (e.g. `"DRAFT"`, `"CONFIDENTIAL"`) |
 | `footerContent`    | string  | No       | `null`         | HTML content rendered as a footer on every page (marked as artifact for accessibility) |
+| `accessible`       | boolean | No       | `true`         | When `true`, produces a tagged 508/PDF-UA-compliant PDF. Set `false` for a faster, **non-accessible** (untagged) PDF when accessibility is not required |
 
 **Response:** `application/pdf` binary stream.
+
+> **Note:** The `/pdf/images` and `/pdf/images/stream` endpoints render untagged PDFs by default (`accessible` defaults to `false` there), since their output is a rasterized PNG where the structure tree provides no benefit. Pass `"accessible": true` if you need the intermediate PDF tagged.
 
 **Example (curl):**
 
