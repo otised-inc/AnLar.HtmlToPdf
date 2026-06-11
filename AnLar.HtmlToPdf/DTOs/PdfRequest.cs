@@ -49,6 +49,16 @@ namespace AnLar.HtmlToPdf.DTOs
         /// The footer is marked as a PDF artifact so screen readers skip it.
         /// </summary>
         public string? FooterContent { get; set; }
+
+        /// <summary>
+        /// When true (default), generates a tagged, 508 / PDF-UA-compliant accessible PDF.
+        /// When false, generates a plain, untagged PDF — faster to produce but NOT
+        /// accessible (no structure tree, no PDF/UA metadata). Use false for speed when
+        /// accessibility is not required.
+        /// </summary>
+        public bool? Accessible { get; set; }
+
+        /// <summary>
         /// Resolution in dots per inch for the /pdf/images endpoint. Defaults to 300.
         /// Higher values produce larger, sharper images.
         /// </summary>
