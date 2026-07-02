@@ -42,13 +42,13 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
         with:
-          app-name: "cdehtmltopdfimagedev"
-          slot-name: "Production"
+          app-name: "htmltopdfdevlinux"
           publish-profile: ${{ secrets.HTMLTOPDFDEVLINUX_WEB_DEPLOYMENT }}
           package: ${{env.DOTNET_ROOT}}/myapp
 
       - name: Notify Slack on failure
         if: always()
+        continue-on-error: true
         uses: ravsamhq/notify-slack-action@v2
         with:
           status: ${{ job.status }}
