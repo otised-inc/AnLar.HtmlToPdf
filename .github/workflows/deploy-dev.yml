@@ -44,7 +44,7 @@ jobs:
         with:
           app-name: "cdehtmltopdfimagedev"
           slot-name: "Production"
-          publish-profile: ${{ secrets.CDEHTMLTOPDFIMAGEDEV_PUBLISH_PROFILE }}
+          publish-profile: ${{ secrets.HTMLTOPDFDEVLINUX_WEB_DEPLOYMENT }}
           package: ${{env.DOTNET_ROOT}}/myapp
 
       - name: Notify Slack on failure
