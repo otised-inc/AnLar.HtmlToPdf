@@ -82,6 +82,8 @@ Converts HTML content to an accessible PDF.
 
 > **Note:** The `/pdf/images` and `/pdf/images/stream` endpoints render untagged PDFs by default (`accessible` defaults to `false` there), since their output is a rasterized PNG where the structure tree provides no benefit. Pass `"accessible": true` if you need the intermediate PDF tagged.
 
+> **Compressed request bodies:** All endpoints accept `Content-Encoding: gzip` (also `br` / `deflate`) request bodies via ASP.NET Core request decompression — recommended for large `htmlContent` payloads, which typically shrink 5–8×. Plain (uncompressed) requests work unchanged.
+
 **Example (curl):**
 
 ```bash
