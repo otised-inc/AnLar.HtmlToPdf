@@ -11,7 +11,6 @@ using iText.Kernel.Colors;
 using iText.Kernel.Pdf.Canvas;
 using iText.Kernel.Pdf.Extgstate;
 using iText.Kernel.Pdf.Tagging;
-using iText.Kernel.XMP;
 using iText.Kernel.Geom;
 using iText.Layout;
 using iText.Layout.Font;
@@ -191,6 +190,13 @@ namespace AnLar.HtmlToPdf.Services
 
             var writerProperties = new WriterProperties();
             writerProperties.SetPdfVersion(PdfVersion.PDF_1_7);
+            // PDF/UA-1 conformance must be declared on the writer — not just written
+            // into XMP by hand — for iText's conformance-aware tagging to activate.
+            // Without it, internal anchor links (href="#...") get tagged as Reference
+            // instead of Link, violating PDF/UA-1 (Matterhorn 28-011). This also emits
+            // the pdfuaid:part=1 XMP packet automatically at document close.
+            if (accessible)
+                writerProperties.AddPdfUaXmpMetadata(PdfUAConformance.PDF_UA_1);
             // EXPERIMENT: trade compression for speed. iText defaults to deflate level 9
             // (BEST_COMPRESSION). For an interactive request/response service, BEST_SPEED
             // (level 1) cuts the write phase substantially at modest size cost.
@@ -217,11 +223,10 @@ namespace AnLar.HtmlToPdf.Services
                 }
 
                 // Title is plain metadata (not an accessibility cost) — keep it always.
+                // In accessible mode iText copies it into the XMP dc:title at close
+                // (AddPdfUaXmpMetadata implies XMP generation from DocumentInfo).
                 var documentInfo = pdfDocument.GetDocumentInfo();
                 documentInfo.SetTitle(documentTitle);
-
-                if (accessible)
-                    SetPdfUaXmpMetadata(pdfDocument, documentTitle);
 
                 var fontProvider = BuildFontProvider();
 
@@ -662,22 +667,6 @@ namespace AnLar.HtmlToPdf.Services
                     existing.Add(dir);
             }
             return [.. existing];
-        }
-
-        private static void SetPdfUaXmpMetadata(PdfDocument pdfDocument, string documentTitle)
-        {
-            XMPMeta xmpMeta = pdfDocument.GetXmpMetadata() ?? XMPMetaFactory.Create();
-
-            const string pdfUaIdSchema = "http://www.aiim.org/pdfua/ns/id/";
-            const string pdfUaIdPrefix = "pdfuaid";
-            XMPMetaFactory.GetSchemaRegistry().RegisterNamespace(pdfUaIdSchema, pdfUaIdPrefix);
-
-            xmpMeta.SetPropertyInteger(pdfUaIdSchema, "part", 1);
-
-            const string dcSchema = "http://purl.org/dc/elements/1.1/";
-            xmpMeta.SetLocalizedText(dcSchema, "title", "x-default", "x-default", documentTitle);
-
-            pdfDocument.SetXmpMetadata(xmpMeta);
         }
 
         private static string WrapInHtmlDocument(
