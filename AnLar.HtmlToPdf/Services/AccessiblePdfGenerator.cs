@@ -57,6 +57,11 @@ namespace AnLar.HtmlToPdf.Services
         // Tag worker factory has no per-request state — share it.
         private static readonly AccessibleTagWorkerFactory _tagWorkerFactory = new();
 
+        // Where generic families (serif, monospace, ...) and unmatched named
+        // families land. Must be a bundled family; keeps cursive faces like
+        // Pinyon Script out of fallback (see FallbackSafeFontProvider).
+        private const string DefaultFontFamily = "Liberation Serif";
+
         public AccessiblePdfGenerator(ILogger<AccessiblePdfGenerator> logger)
         {
             _logger = logger;
@@ -99,6 +104,12 @@ namespace AnLar.HtmlToPdf.Services
                 _logger.LogInformation("Font path cache: {Total} files ({Bundled} bundled, {System} system)",
                     paths.Count, bundledCount, paths.Count - bundledCount);
 
+                // Directory enumeration order is filesystem-dependent (arbitrary
+                // on Linux), and FontSelector resolves residual score ties by
+                // registration order — sort so every platform registers fonts
+                // identically and renders identical PDFs.
+                paths.Sort(StringComparer.OrdinalIgnoreCase);
+
                 _cachedFontFilePaths = paths;
                 return _cachedFontFilePaths;
             }
@@ -130,7 +141,7 @@ namespace AnLar.HtmlToPdf.Services
         {
             // Fresh FontProvider per request (see note above), but fed from the
             // shared FontProgram cache so no font file is re-read or re-parsed.
-            var fp = new FontProvider();
+            var fp = new FallbackSafeFontProvider(DefaultFontFamily);
             foreach (var program in GetCachedFontPrograms())
                 fp.AddFont(program);
             return fp;
