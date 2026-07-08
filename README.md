@@ -8,7 +8,7 @@ An ASP.NET Core Web API that converts HTML content into accessible PDF documents
 - **HTML-to-PDF Conversion** — Accepts raw HTML fragments or full documents and returns a PDF binary
 - **Semantic Heading Structure** — Custom tag worker produces clean H1–H6 structure elements without iText's default intermediate `P` wrappers
 - **Automatic Bookmarks** — Headings generate a PDF outline/bookmark tree via iText's `OutlineHandler`
-- **Bundled Fonts** — Ships with Liberation Serif (Regular, Bold, Italic, Bold Italic) so PDFs render consistently even on minimal Linux containers
+- **Bundled Fonts** — Ships with Liberation Serif (Regular, Bold, Italic, Bold Italic) for body text and Pinyon Script for cursive/signature styles, so PDFs render consistently even on minimal Linux containers (see [Bundled Fonts & Licensing](#bundled-fonts--licensing))
 - **Cross-Platform Font Resolution** — Multi-strategy font loading: bundled content files, embedded assembly resources, and system font directories on Windows and Linux
 - **Smart HTML Wrapping** — Automatically wraps partial HTML snippets in a complete document with `@page` margins, language attribute, and default serif typography
 - **Page Layout Control** — Configurable page orientation (portrait/landscape) and per-side margins in millimeters
@@ -179,7 +179,9 @@ AnLar.HtmlToPdf/
         ├── LiberationSerif-Bold.ttf
         ├── LiberationSerif-Italic.ttf
         ├── LiberationSerif-BoldItalic.ttf
-        └── LICENSE-LiberationFonts.txt
+        ├── PinyonScript-Regular.ttf
+        ├── LICENSE-LiberationFonts.txt
+        └── LICENSE-PinyonScript.txt
 AnLar.HtmlToPdf.Tests/
     ├── InlineImageTests.cs            # Unit tests for inline image handling
     ├── FooterTests.cs                 # Unit tests for HTML footer rendering
@@ -208,7 +210,48 @@ dotnet publish -c Release -r linux-x64
 | `PDFtoImage`                     | 5.2.1   | PDF page rendering for `/pdf/images` endpoint |
 | `Newtonsoft.Json`                | 13.0.4  | Pinned to override a vulnerable transitive pulled in by iText |
 
-Fonts are [Liberation Serif](https://github.com/liberationfonts/liberation-fonts) licensed under the SIL Open Font License.
+## Bundled Fonts & Licensing
+
+Fonts in `AnLar.HtmlToPdf/Fonts/` are embedded in the assembly, copied to the deployment output, and automatically registered with iText's font provider at startup. Request HTML can reference them by family name — no `@font-face` needed.
+
+| Font | CSS family name | Style | License |
+|------|-----------------|-------|---------|
+| [Liberation Serif](https://github.com/liberationfonts/liberation-fonts) (Regular, Bold, Italic, Bold Italic) | `Liberation Serif` | Serif body text (metric-compatible with Times New Roman) | SIL OFL 1.1 — `Fonts/LICENSE-LiberationFonts.txt` |
+| [Pinyon Script](https://fonts.google.com/specimen/Pinyon+Script) | `Pinyon Script` | Cursive / signature styles | SIL OFL 1.1 — `Fonts/LICENSE-PinyonScript.txt` |
+
+Example usage in request HTML:
+
+```html
+<span style="font-family: 'Pinyon Script', cursive; font-size: 28px;">Jane Doe</span>
+```
+
+### Why the bundled fonts are legal to embed
+
+PDF/UA (accessible) output requires every font to be **embedded** in the generated PDF, and this service embeds fonts into documents generated **automatically, server-side, on behalf of arbitrary callers**. Both facts matter legally: most commercial font licenses do not cover this use.
+
+Both bundled font families are licensed under the [SIL Open Font License 1.1](https://openfontlicense.org/) (OFL), which explicitly permits this service's exact usage:
+
+- **Document embedding is allowed**, in full or as a subset. Per the [OFL FAQ](https://openfontlicense.org/ofl-faq/), a font embedded in a document is not considered redistribution of the font software, and the generated document does **not** inherit the OFL — output PDFs remain unencumbered.
+- **Server-side / automated document generation is allowed.** The OFL places no restrictions on where the font is installed or whether documents are produced by an automated service.
+- **Commercial use is allowed**, with no per-document or per-server fees.
+
+Copyright holders: Liberation fonts © 2012 Red Hat, Inc. (Reserved Font Name "Liberation"); Pinyon Script © 2024 The Pinyon Project Authors, [github.com/SorkinType/Pinyon](https://github.com/SorkinType/Pinyon) (Reserved Font Name "Pinyon Script"). The bundled Pinyon Script files were obtained from the canonical [google/fonts](https://github.com/google/fonts/tree/main/ofl/pinyonscript) distribution.
+
+### Obligations we must keep
+
+- **Ship the license text with the font files.** Bundling a TTF inside this application *is* redistribution of the font software, so each font's OFL text (`Fonts/LICENSE-*.txt`) lives in the repo and is copied to the deployment output alongside the fonts. Keep it that way.
+- **Never sell the font files by themselves** (not applicable to this service, but an OFL condition).
+- **Don't modify a font and redistribute it under its Reserved Font Name.** A modified Pinyon Script or Liberation font must be renamed.
+
+### Adding new fonts — read this first
+
+Drop a `.ttf`/`.otf` into `Fonts/` plus its license file and it will be picked up automatically. **But check the license before adding anything:**
+
+- ✅ **SIL OFL fonts** (everything on Google Fonts under OFL): safe for this service.
+- ❌ **Adobe Fonts / Creative Cloud fonts** (e.g., Bickham Script): the [Adobe Fonts terms](https://helpx.adobe.com/fonts/using/font-licensing.html) exclude server installation and automated document generation. A CC subscription does **not** cover this service.
+- ⚠️ **Purchased desktop licenses** (Fontspring, MyFonts, etc.): standard desktop EULAs cover documents a licensed human creates, not automated server generation. A separate "server", "app", or "electronic document" license tier is required — get it in writing before bundling.
+
+A font file's internal embedding flag (`fsType`) permitting embedding is **not** a license; the EULA governs.
 
 ## Postman Example
 

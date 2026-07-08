@@ -16,7 +16,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Fonts\*.ttf" />
     <None Update="Fonts\*.ttf" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="Fonts\LICENSE-LiberationFonts.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fonts\LICENSE-*.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
