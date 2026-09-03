@@ -44,7 +44,7 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
         with:
-          app-name: "htmltopdfprodlinux"
+          app-name: "htmltopdflinux"
           publish-profile: ${{ secrets.HTMLTOPDFPRODLINUX_WEB_DEPLOYMENT }}
           package: ${{env.DOTNET_ROOT}}/myapp
 
