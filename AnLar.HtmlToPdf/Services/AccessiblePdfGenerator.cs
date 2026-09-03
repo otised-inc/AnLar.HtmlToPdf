@@ -470,10 +470,72 @@ namespace AnLar.HtmlToPdf.Services
             }
         }
 
-        private static void AddPageNumbers(PdfDocument pdfDocument)
+        /// <summary>
+        /// WHAT: returns the font used for stamped artifacts (page numbers, watermark), loaded from the
+        /// bundled Liberation Serif and forced to embed.
+        /// <para>
+        /// FIXES: the PDF/UA error "Font not embedded". This used to call StandardFonts.HELVETICA. The
+        /// base-14 fonts (Helvetica, Times, Courier) are never written into the PDF, and PDF/UA requires every
+        /// font to be embedded, so one page-number stamp failed the whole document. Marking the stamp as an
+        /// artifact does not help: embedding is checked regardless. Found by PAC 2026 on NV-2943.
+        /// </para>
+        /// <para>
+        /// No new font licence needed. Liberation Serif is already bundled here under the SIL OFL, which
+        /// permits server-side embedding. If the bundled file is missing we fall back to Helvetica and log a
+        /// warning: stamping keeps working, but the output is no longer conformant, so the failure is loud
+        /// rather than silent.
+        /// </para>
+        /// </summary>
+        private PdfFont CreateStampFont(bool bold = false)
+        {
+            var fileName = bold ? "LiberationSerif-Bold.ttf" : "LiberationSerif-Regular.ttf";
+            var bundledDir = ResolveBundledFontDirectory();
+
+            if (bundledDir != null)
+            {
+                var fontPath = System.IO.Path.Combine(bundledDir, fileName);
+
+                if (File.Exists(fontPath))
+                {
+                    try
+                    {
+                        // EmbeddingStrategy.FORCE_EMBEDDED is the point of this method: without it iText may
+                        // reference the font rather than embed it, which is the exact failure being fixed.
+                        return PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H,
+                            PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Could not embed bundled font {File} for stamped artifacts; falling back to a " +
+                            "standard font. The output will NOT be PDF/UA conformant.", fileName);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Bundled font {Path} not found; stamped artifacts fall back to a standard font and " +
+                        "the output will NOT be PDF/UA conformant.", fontPath);
+                }
+            }
+
+            return PdfFontFactory.CreateFont(bold ? StandardFonts.HELVETICA_BOLD : StandardFonts.HELVETICA);
+        }
+
+        /// <summary>
+        /// WHAT: stamps "Page X of Y" centred at the foot of every page, marked as a PDF artifact so screen
+        /// readers skip it.
+        /// <para>
+        /// CHANGED for NV-2943: the font now comes from CreateStampFont (bundled + embedded) instead of
+        /// Helvetica, and the method is no longer static because it needs the logger and the bundled-font
+        /// lookup. This footer was the single source of the "Font not embedded" PDF/UA error.
+        /// </para>
+        /// </summary>
+        private void AddPageNumbers(PdfDocument pdfDocument)
         {
             int totalPages = pdfDocument.GetNumberOfPages();
-            var font = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+            // Created once here, not per page: the loop below reuses it.
+            var font = CreateStampFont();
             const float fontSize = 9f;
 
             for (int i = 1; i <= totalPages; i++)
@@ -552,10 +614,18 @@ namespace AnLar.HtmlToPdf.Services
             }
         }
 
-        private static void AddWatermark(PdfDocument pdfDocument, string watermarkText)
+        /// <summary>
+        /// WHAT: draws a diagonal watermark across every page, marked as a PDF artifact.
+        /// <para>
+        /// CHANGED for NV-2943: font source and static-to-instance, exactly as AddPageNumbers.
+        /// </para>
+        /// </summary>
+        private void AddWatermark(PdfDocument pdfDocument, string watermarkText)
         {
             int totalPages = pdfDocument.GetNumberOfPages();
-            var font = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
+            // Same unembedded-font bug as the page numbers, fixed the same way. Nobody reported this one: it
+            // would have failed PDF/UA the first time any caller passed a watermark. See CreateStampFont.
+            var font = CreateStampFont(bold: true);
             const float fontSize = 60f;
             var grayColor = new DeviceRgb(200, 200, 200);
             var gs = new PdfExtGState().SetFillOpacity(0.3f);
@@ -743,8 +813,154 @@ namespace AnLar.HtmlToPdf.Services
                 {
                     return new AccessibleImageTagWorker(tag, context);
                 }
+                // NV-2943: list items need their marker moved into the item text. See
+                // AccessibleListItemTagWorker for why.
+                if (name == "li")
+                {
+                    return new AccessibleListItemTagWorker(tag, context);
+                }
                 return null;
             }
+        }
+
+        /// <summary>
+        /// WHAT: takes the bullet away from iText and puts the bullet character inside the list item's own
+        /// text instead.
+        /// <para>
+        /// FIXES a reading-order defect that PAC does NOT report. iText lays out every list marker in one
+        /// pass and the item bodies in another, so a bullet is written into the page content stream well
+        /// before the text it belongs to. The tag tree is correct, but the CONTENT order is not, so assistive
+        /// technology that follows document reading order (rather than the tag tree) reads bullets in the
+        /// wrong place. Found by the 508 reviewer on NV-2943.
+        /// </para>
+        /// <para>
+        /// Two halves, and both are needed. GetElementResult removes iText's symbol; ProcessContent adds the
+        /// character back into the text. One without the other either loses every bullet or draws two.
+        /// </para>
+        /// <para>
+        /// The symbol is removed by giving it a null role, which makes it an artifact rather than an EMPTY
+        /// Lbl. An empty label is worse than none: a screen reader announces a label that says nothing. Each
+        /// item ends up as a clean LI > LBody, which is valid because Lbl is optional in PDF/UA.
+        /// </para>
+        /// <para>
+        /// ORDERED lists are deliberately left alone. Their markers are generated numbers, and writing a
+        /// number into the item text would break list continuation, nesting and the start attribute.
+        /// </para>
+        /// </summary>
+        private class AccessibleListItemTagWorker : LiTagWorker
+        {
+            /// <summary>
+            /// WHAT: the character to draw for each unordered marker style, matching what a browser shows as
+            /// lists nest: disc at the top level, then circle, then square.
+            /// <para>
+            /// WHY all three: a nested &lt;ul&gt; resolves to "circle", not "disc". An earlier version matched
+            /// only "disc", which silently left EVERY nested list with the reading-order bug. Found by
+            /// testing, not by a report.
+            /// </para>
+            /// </summary>
+            private static readonly Dictionary<string, string> BulletCharacters = new()
+            {
+                ["disc"] = "• ",
+                ["circle"] = "◦ ",
+                ["square"] = "▪ ",
+            };
+
+            /// <summary>Marker text to prepend, or null when this item should get no marker at all.</summary>
+            private readonly string? _bulletCharacter;
+
+            /// <summary>
+            /// WHAT: true when iText's own list symbol must be turned off.
+            /// <para>
+            /// Set for the bullet styles (the marker moves into the item text) and for an explicit "none"
+            /// (where iText would otherwise emit an Lbl wrapping an empty string). False for ordered lists,
+            /// which keep their generated numbers.
+            /// </para>
+            /// </summary>
+            private readonly bool _suppressSymbol;
+
+            /// <summary>Guard so the marker is prepended once, not once per chunk of text.</summary>
+            private bool _bulletEmitted;
+
+            /// <summary>
+            /// WHAT: reads this item's list-style-type once and decides the policy for it: which marker
+            /// character to use, and whether to suppress iText's own symbol.
+            /// </summary>
+            public AccessibleListItemTagWorker(IElementNode element, ProcessorContext context)
+                : base(element, context)
+            {
+                string? listStyle = null;
+                var styles = element.GetStyles();
+                if (styles != null)
+                    styles.TryGetValue("list-style-type", out listStyle);
+
+                // No declared style means the browser default for an unordered list.
+                if (string.IsNullOrEmpty(listStyle))
+                    listStyle = "disc";
+
+                if (BulletCharacters.TryGetValue(listStyle, out var bullet))
+                {
+                    _bulletCharacter = bullet;
+                    _suppressSymbol = true;
+                }
+                else if (listStyle == "none")
+                {
+                    // Author wants no marker: honour that, but still drop the empty Lbl.
+                    _bulletCharacter = null;
+                    _suppressSymbol = true;
+                }
+                else
+                {
+                    // Ordered lists (decimal, lower-alpha, upper-roman, ...) keep iText's generated markers.
+                    // Baking a number into the text would break continuation, nesting and the start attribute.
+                    _bulletCharacter = null;
+                    _suppressSymbol = false;
+                }
+            }
+
+            /// <summary>
+            /// WHAT: removes iText's list symbol so it never gets drawn separately.
+            /// <para>
+            /// Setting the symbol to "" is NOT enough: iText still emits an Lbl containing an empty string,
+            /// and a screen reader announces that as a label saying nothing. Giving the symbol a null role
+            /// makes it an artifact, so it drops out of the structure tree entirely.
+            /// </para>
+            /// </summary>
+            public override IPropertyContainer GetElementResult()
+            {
+                var result = base.GetElementResult();
+
+                if (_suppressSymbol && result is iText.Layout.Element.ListItem listItem)
+                {
+                    // Empty string, null role: nothing to draw and nothing in the structure tree.
+                    var symbol = new iText.Layout.Element.Text("");
+                    symbol.GetAccessibilityProperties().SetRole(null);
+                    listItem.SetListSymbol(symbol);
+                }
+
+                return result;
+            }
+
+            /// <summary>
+            /// WHAT: puts the marker character back, at the front of the first real text this item receives,
+            /// so marker and text sit in one marked-content run in the right order.
+            /// <para>
+            /// _bulletEmitted guards it: an item whose text arrives in several pieces must not collect
+            /// several bullets.
+            /// </para>
+            /// </summary>
+            public override bool ProcessContent(string content, ProcessorContext context)
+            {
+                // Prepend the bullet to the FIRST text this item receives, so it lands inside the item's own
+                // marked-content run rather than in a separately drawn symbol.
+                if (_bulletCharacter != null && !_bulletEmitted && !string.IsNullOrWhiteSpace(content))
+                {
+                    _bulletEmitted = true;
+                    return base.ProcessContent(_bulletCharacter + content, context);
+                }
+
+                return base.ProcessContent(content, context);
+            }
+
         }
 
         /// <summary>
@@ -762,6 +978,14 @@ namespace AnLar.HtmlToPdf.Services
                 headingRole = element.Name().ToUpperInvariant();
             }
 
+            /// <summary>
+            /// WHAT: removes iText's list symbol so it never gets drawn separately.
+            /// <para>
+            /// Setting the symbol to "" is NOT enough: iText still emits an Lbl containing an empty string,
+            /// and a screen reader announces that as a label saying nothing. Giving the symbol a null role
+            /// makes it an artifact, so it drops out of the structure tree entirely.
+            /// </para>
+            /// </summary>
             public override IPropertyContainer GetElementResult()
             {
                 var result = base.GetElementResult();
@@ -789,6 +1013,14 @@ namespace AnLar.HtmlToPdf.Services
                 _element = element;
             }
 
+            /// <summary>
+            /// WHAT: removes iText's list symbol so it never gets drawn separately.
+            /// <para>
+            /// Setting the symbol to "" is NOT enough: iText still emits an Lbl containing an empty string,
+            /// and a screen reader announces that as a label saying nothing. Giving the symbol a null role
+            /// makes it an artifact, so it drops out of the structure tree entirely.
+            /// </para>
+            /// </summary>
             public override IPropertyContainer GetElementResult()
             {
                 var result = base.GetElementResult();
