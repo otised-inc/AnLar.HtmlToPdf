@@ -426,3 +426,9 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# OES workflow state (not committed)
+.oes/
+
+# Windows: Claude Code bash redirect creates literal NUL files
+NUL
