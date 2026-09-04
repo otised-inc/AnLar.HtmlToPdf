@@ -1,22 +1,26 @@
 # AnLar.HtmlToPdf
 
-An ASP.NET Core Web API that converts HTML content into accessible PDF documents compliant with the **PDF/UA** (Universal Accessibility) standard. Built with [iText](https://itextpdf.com/) for reliable, structured PDF generation suitable for screen readers and assistive technologies.
+An ASP.NET Core Web API that converts HTML content into accessible PDF documents compliant with the **PDF/UA** (Universal Accessibility) standard, with an opt-in fast (untagged) mode and PDF-to-PNG rendering. Built with [iText](https://itextpdf.com/) for reliable, structured PDF generation suitable for screen readers and assistive technologies.
 
 ## Features
 
 - **PDF/UA-1 Compliance** — Tagged PDF structure with XMP metadata, document language, title, and `DisplayDocTitle` viewer preference (PDF 1.7)
 - **HTML-to-PDF Conversion** — Accepts raw HTML fragments or full documents and returns a PDF binary
+- **Fast (Untagged) Mode** — Set `"accessible": false` to skip tagging and PDF/UA metadata for a faster, smaller PDF when accessibility is not required; all other options still apply
 - **Semantic Heading Structure** — Custom tag worker produces clean H1–H6 structure elements without iText's default intermediate `P` wrappers
+- **List Markers in Reading Order** — Custom list-item tag worker keeps bullet characters (disc, circle, square) in the correct reading order for screen readers, including nested lists
 - **Automatic Bookmarks** — Headings generate a PDF outline/bookmark tree via iText's `OutlineHandler`
 - **Bundled Fonts** — Ships with Liberation Serif (Regular, Bold, Italic, Bold Italic) for body text and Pinyon Script for cursive/signature styles, so PDFs render consistently even on minimal Linux containers (see [Bundled Fonts & Licensing](#bundled-fonts--licensing))
-- **Cross-Platform Font Resolution** — Multi-strategy font loading: bundled content files, embedded assembly resources, and system font directories on Windows and Linux
-- **Smart HTML Wrapping** — Automatically wraps partial HTML snippets in a complete document with `@page` margins, language attribute, and default serif typography
-- **Page Layout Control** — Configurable page orientation (portrait/landscape) and per-side margins in millimeters
-- **Optional Page Numbers** — Adds centered "Page X of Y" footers, marked as PDF artifacts to preserve accessibility compliance
+- **Deterministic Font Fallback** — Fonts load from the bundled `Fonts/` directory (falling back to embedded assembly resources); system font directories are **not** scanned. Unmatched families always fall back to Liberation Serif, never to a decorative face, via a custom `FallbackSafeFontProvider`
+- **Smart HTML Wrapping** — Automatically wraps partial HTML snippets in a complete document with `@page` margins, language attribute, and default serif typography. Full documents (starting with `<!DOCTYPE` or `<html`) pass through untouched
+- **Page Layout Control** — Configurable page orientation (portrait/landscape) and per-side margins in millimeters (applies to HTML fragments; full documents control their own `@page` rules)
+- **Optional Page Numbers** — Adds centered "Page X of Y" footers, marked as PDF artifacts to preserve accessibility compliance. Stamps use the bundled, embedded Liberation Serif so PDF/UA font-embedding checks still pass
 - **Watermark Support** — Optional diagonal watermark text (e.g. "DRAFT", "CONFIDENTIAL") rendered in light gray with 30% opacity, marked as a PDF artifact so it doesn't interfere with screen readers
-- **Custom HTML Footers** — Render arbitrary HTML/CSS as a footer on every page, marked as a PDF artifact to preserve accessibility compliance
+- **Custom HTML Footers** — Render arbitrary HTML/CSS as a footer on every page with `{pageNumber}` / `{totalPages}` placeholders, marked as a PDF artifact to preserve accessibility compliance. The bottom margin is raised to at least 20 mm to make room
 - **Inline Image Support** — Handles base64-encoded and URL-referenced images with full 508/PDF-UA compliance: images with `alt` text are tagged as Figure elements, empty `alt=""` marks images as decorative (excluded from structure tree), and missing `alt` attributes receive a fallback description
-- **PDF-to-Image Export** — Convert generated PDFs to high-quality PNG images at configurable DPI via the `/pdf/images` endpoint
+- **PDF-to-Image Export** — Convert generated PDFs to high-quality PNG images at configurable DPI via the `/pdf/images` endpoint, or stream them page-by-page as NDJSON via `/pdf/images/stream` for large jobs
+- **Compressed Requests** — All endpoints accept `Content-Encoding: gzip` / `br` / `deflate` request bodies
+- **Background Warmup** — iText is pre-warmed on a background thread at startup so the first request avoids most of the cold-start cost
 
 ## Prerequisites
 
@@ -78,7 +82,9 @@ Converts HTML content to an accessible PDF.
 | `footerContent`    | string  | No       | `null`         | HTML content rendered as a footer on every page (marked as artifact for accessibility) |
 | `accessible`       | boolean | No       | `true`         | When `true`, produces a tagged 508/PDF-UA-compliant PDF. Set `false` for a faster, **non-accessible** (untagged) PDF when accessibility is not required |
 
-**Response:** `application/pdf` binary stream.
+**Response:** `application/pdf` binary stream. Validation failures return `400` with a plain-text message (e.g. `htmlContent is required.`).
+
+> **Fragments vs. full documents:** `pageOrientation`, the four margins, `documentTitle` and `documentLanguage` are applied by wrapping an HTML *fragment* in a complete document. If `htmlContent` already starts with `<!DOCTYPE` or `<html`, it is passed through unchanged and must supply its own `@page` rules and `lang` attribute.
 
 > **Note:** The `/pdf/images` and `/pdf/images/stream` endpoints render untagged PDFs by default (`accessible` defaults to `false` there), since their output is a rasterized PNG where the structure tree provides no benefit. Pass `"accessible": true` if you need the intermediate PDF tagged.
 
@@ -132,7 +138,7 @@ Streaming variant of `/pdf/images` for large or memory-sensitive jobs. Emits NDJ
 
 **Request Body (JSON):** Same as `POST /pdf/images`.
 
-**Response:** `application/x-ndjson` — one `PageImage` JSON object per line, in the order pages finish encoding (which may differ from page order under parallel encoding; use the `page` field to reassemble).
+**Response:** `application/x-ndjson` — one `PageImage` JSON object per line, in the order pages finish encoding (which may differ from page order under parallel encoding; use the `page` field to reassemble). Validation failures return `400` with a JSON body `{"error": "..."}`.
 
 ```
 {"page":0,"totalPages":3,"base64":"<png-1>"}
@@ -157,17 +163,22 @@ curl -N -X POST https://localhost:50670/pdf/images/stream \
 ## Project Structure
 
 ```
-AnLar.HtmlToPdf/
+PDF Generator/
 ├── AnLar.HtmlToPdf.sln
+├── .github/workflows/
+│   ├── deploy-dev.yml                    # Deploys master → htmltopdfdevlinux (Azure Web App)
+│   └── deploy-prod.yml                   # Deploys prod → htmltopdflinux (Azure Web App)
+├── docs/                                 # User guides + technical docs (GitBook layout)
 └── AnLar.HtmlToPdf/
     ├── AnLar.HtmlToPdf.csproj
-    ├── Program.cs                        # App entry point & service registration
+    ├── Program.cs                        # App entry point, DI, request decompression, warmup
     ├── appsettings.json
     ├── appsettings.Development.json
     ├── Controllers/
-    │   └── PdfController.cs              # POST /pdf endpoint
+    │   └── PdfController.cs              # POST /pdf, /pdf/images, /pdf/images/stream
     ├── Services/
-    │   └── AccessiblePdfGenerator.cs     # Core PDF generation & accessibility logic
+    │   ├── AccessiblePdfGenerator.cs     # Core PDF generation, tagging, stamping, rasterization
+    │   └── FallbackSafeFontProvider.cs   # Deterministic font fallback (never Pinyon unless named)
     ├── DTOs/
     │   ├── PdfRequest.cs                 # Request model
     │   ├── PdfImagesResponse.cs          # Response model for /pdf/images
@@ -183,9 +194,19 @@ AnLar.HtmlToPdf/
         ├── LICENSE-LiberationFonts.txt
         └── LICENSE-PinyonScript.txt
 AnLar.HtmlToPdf.Tests/
-    ├── InlineImageTests.cs            # Unit tests for inline image handling
-    ├── FooterTests.cs                 # Unit tests for HTML footer rendering
-    └── PdfToImageTests.cs             # Unit tests for PDF-to-image export
+    ├── CompliancePreservationTests.cs # Stamping keeps PDF/UA metadata & structure tree intact
+    ├── FastModeTests.cs               # accessible:false produces untagged PDFs without PDF/UA metadata
+    ├── FontFallbackTests.cs           # Fallback never resolves to Pinyon Script unless requested
+    ├── FooterTests.cs                 # HTML footer rendering & placeholders
+    ├── InlineImageTests.cs            # Image sources, alt text, Figure/decorative tagging
+    ├── PdfToImageTests.cs             # PDF-to-image export
+    └── RequestDecompressionTests.cs   # gzip request bodies (WebApplicationFactory integration tests)
+```
+
+Run the tests with:
+
+```bash
+dotnet test AnLar.HtmlToPdf.sln
 ```
 
 ## Build & Publish
@@ -201,6 +222,17 @@ dotnet publish -c Release
 dotnet publish -c Release -r linux-x64
 ```
 
+## Deployment
+
+GitHub Actions deploys to Azure Web Apps (Linux) on push. Each workflow restores, builds, runs the test suite, publishes, and deploys with a publish-profile secret; failures are posted to Slack.
+
+| Branch   | Workflow                              | Azure Web App          | Publish-profile secret              |
+|----------|---------------------------------------|------------------------|-------------------------------------|
+| `master` | `.github/workflows/deploy-dev.yml`    | `htmltopdfdevlinux`    | `HTMLTOPDFDEVLINUX_WEB_DEPLOYMENT`  |
+| `prod`   | `.github/workflows/deploy-prod.yml`   | `htmltopdflinux`       | `HTMLTOPDFPRODLINUX_WEB_DEPLOYMENT` |
+
+The prod workflow runs under the GitHub `production` environment and can also be triggered manually from the Actions tab.
+
 ## Dependencies
 
 | Package                          | Version | Purpose                                   |
@@ -212,7 +244,9 @@ dotnet publish -c Release -r linux-x64
 
 ## Bundled Fonts & Licensing
 
-Fonts in `AnLar.HtmlToPdf/Fonts/` are embedded in the assembly, copied to the deployment output, and automatically registered with iText's font provider at startup. Request HTML can reference them by family name — no `@font-face` needed.
+Fonts in `AnLar.HtmlToPdf/Fonts/` are embedded in the assembly and copied to the deployment output. They are parsed once and cached for the process lifetime, and registered with a fresh iText font provider on every request. Request HTML can reference them by family name — no `@font-face` needed.
+
+**Only bundled fonts are available.** System font directories are intentionally not scanned, so naming an installed system font (e.g. `Arial`) without an `@font-face` falls back to Liberation Serif. `@font-face` declarations in request HTML are honored when their source resolves.
 
 | Font | CSS family name | Style | License |
 |------|-----------------|-------|---------|
